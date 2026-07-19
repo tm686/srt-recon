@@ -1,0 +1,40 @@
+# SRT-Recon Configuration
+# Copy this to srt-recon.conf and customize for your system.
+# The install.sh script reads this file to configure paths and options.
+
+# ─── System Paths ────────────────────────────────────────────────────
+# Go binary path (where go install puts tools)
+GO_TOOLS_PATH="$HOME/go/bin"
+
+# SecLists location (apt install seclists or manual clone)
+SECLISTS_PATH="/usr/share/seclists"
+
+# ─── Backend ─────────────────────────────────────────────────────────
+# Listen address and port for the FastAPI backend
+BACKEND_HOST="127.0.0.1"
+BACKEND_PORT="8000"
+
+# SQLite database location (relative to backend/)
+DATABASE_PATH="./srt_recon.db"
+
+# ─── Frontend ────────────────────────────────────────────────────────
+# Vite dev server
+FRONTEND_HOST="127.0.0.1"
+FRONTEND_PORT="5173"
+
+# ─── Scan Defaults ───────────────────────────────────────────────────
+DEFAULT_THREADS="10"
+NUCLEI_SEVERITY="low,medium,high,critical"
+FFUF_WORDLIST="/usr/share/seclists/Discovery/Web-Content/common.txt"
+
+# ─── Optional: Skip tool installation (set to 1 to skip) ────────────
+SKIP_GO_TOOLS="0"
+SKIP_SYSTEM_CHECK="0"
+
+# ─── Optional: Custom Go install list (space-separated) ─────────────
+# Override if you only need specific tools
+# GO_TOOLS_OVERRIDE="subfinder httpx nuclei"
+
+# ─── Network ─────────────────────────────────────────────────────────
+# Set to 1 if behind a proxy (will skip go install network calls)
+OFFLINE_MODE="0"
