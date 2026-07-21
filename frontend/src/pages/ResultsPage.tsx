@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -31,7 +35,137 @@ const RESULT_TYPES = [
   { value: "directory", label: "Directories" },
   { value: "vulnerability", label: "Vulnerabilities" },
   { value: "dns_record", label: "DNS Records" },
+  { value: "screenshot", label: "Screenshots" },
 ];
+
+// ── Severity Badge ──────────────────────────────────────────────────
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: "bg-red text-white",
+  high: "bg-orange-500 text-white",
+  medium: "bg-yellow text-background",
+  low: "bg-blue-500 text-white",
+  info: "bg-text-muted/30 text-text",
+};
+
+function SeverityBadge({ severity }: { severity: string }) {
+  const s = (severity || "").toLowerCase();
+  const cls = SEVERITY_COLORS[s] || "bg-text-muted/20 text-text-muted";
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${cls}`}>
+      {s || "unknown"}
+    </span>
+  );
+}
+
+function StatusBadge({ code }: { code: number | undefined }) {
+  if (!code) return null;
+  const cls =
+    code < 300 ? "bg-green/20 text-green" :
+    code < 400 ? "bg-yellow/20 text-yellow" :
+    code < 500 ? "bg-orange-500/20 text-orange-400" :
+    "bg-red/20 text-red";
+  return <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${cls}`}>{code}</span>;
+}
+
+// ── Metadata Details renderer ───────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeParse(json: string): Record<string, any> {
+  try {
+    return JSON.parse(json || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function MetadataDetails({ resultType, metadataJson, value, projectId }: {
+  resultType: string;
+  metadataJson: string;
+  value: string;
+  projectId: number;
+}) {
+  const m = safeParse(metadataJson);
+
+  // Skip empty metadata
+  const hasData = Object.keys(m).some((k) => m[k] !== null && m[k] !== undefined && m[k] !== "");
+  if (!hasData) return <span className="text-text-muted">-</span>;
+
+  switch (resultType) {
+    case "vulnerability":
+      return (
+        <div className="flex items-center gap-2 flex-wrap">
+          {m.severity && <SeverityBadge severity={String(m.severity)} />}
+          {m.name && <span className="text-text text-xs">{String(m.name)}</span>}
+          {m.template_id && <span className="text-text-muted text-[10px] font-mono">{String(m.template_id)}</span>}
+          {m.service && <span className="text-text text-xs">{String(m.service)}</span>}
+          {m.type && <span className="text-orange-400 text-xs">{String(m.type)}</span>}
+        </div>
+      );
+
+    case "live_host":
+      return (
+        <div className="flex items-center gap-2 flex-wrap">
+          {m.status_code && <StatusBadge code={Number(m.status_code)} />}
+          {m.title && <span className="text-text text-xs">{String(m.title)}</span>}
+          {m.server && <span className="text-text-muted text-[10px]">{String(m.server)}</span>}
+          {Array.isArray(m.tech) && m.tech.length > 0 && (
+            <div className="flex gap-1 flex-wrap">
+              {(m.tech as string[]).slice(0, 3).map((t) => (
+                <Badge key={t} variant="secondary" className="text-[9px]">{t}</Badge>
+              ))}
+              {(m.tech as string[]).length > 3 && (
+                <span className="text-text-muted text-[10px]">+{(m.tech as string[]).length - 3}</span>
+              )}
+            </div>
+          )}
+        </div>
+      );
+
+    case "port":
+      return (
+        <span className="text-xs">
+          {m.service && <span className="text-green mr-1">{String(m.service)}</span>}
+          {m.protocol && <span className="text-text-muted">/{String(m.protocol)}</span>}
+          {m.state && <span className="text-text-muted ml-1">({String(m.state)})</span>}
+        </span>
+      );
+
+    case "directory":
+      return (
+        <span className="text-xs flex items-center gap-2">
+          {m.status && <StatusBadge code={Number(m.status)} />}
+          {m.length != null && <span className="text-text-muted">{String(m.length)} bytes</span>}
+        </span>
+      );
+
+    case "dns_record": {
+      const records = ["a", "aaaa", "cname", "mx", "ns", "txt"]
+        .filter((k) => m[k])
+        .map((k) => `${k.toUpperCase()}: ${Array.isArray(m[k]) ? (m[k] as string[]).join(", ") : String(m[k])}`)
+        .join(" | ");
+      return <span className="text-xs text-text-muted">{records || "-"}</span>;
+    }
+
+    case "screenshot":
+      return (
+        <img
+          src={`/api/screenshots/${projectId}/${value}`}
+          alt={value}
+          className="w-48 h-auto rounded border border-border cursor-pointer hover:border-cyan hover:shadow-lg transition-all"
+          loading="lazy"
+          onDoubleClick={() => {
+            // Dispatch custom event to open lightbox in parent
+            window.dispatchEvent(
+              new CustomEvent("screenshot-lightbox", { detail: { filename: value, projectId } })
+            );
+          }}
+          title="Double-click to enlarge"
+        />
+      );
+
+    default:
+      return <span className="text-text-muted">-</span>;
+  }
+}
 
 export function ResultsPage() {
   const { projects } = useProjects();
@@ -39,6 +173,17 @@ export function ResultsPage() {
   const [resultType, setResultType] = useState("");
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [lightbox, setLightbox] = useState<{ filename: string; projectId: number } | null>(null);
+
+  // Listen for screenshot-lightbox events from MetadataDetails
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setLightbox({ filename: detail.filename, projectId: detail.projectId });
+    };
+    window.addEventListener("screenshot-lightbox", handler);
+    return () => window.removeEventListener("screenshot-lightbox", handler);
+  }, []);
 
   const projectId = selectedProject ? Number(selectedProject) : 0;
   const { results, stats, loading, clearResults } = useResults(
@@ -134,7 +279,7 @@ export function ResultsPage() {
 
       {/* Stats */}
       {projectId > 0 && stats && (
-        <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
+        <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
           {[
             { label: "Subdomains", count: stats.subdomains, color: "text-cyan" },
             { label: "Live Hosts", count: stats.live_hosts, color: "text-green" },
@@ -143,6 +288,7 @@ export function ResultsPage() {
             { label: "Dirs", count: stats.directories, color: "text-text" },
             { label: "Vulns", count: stats.vulnerabilities, color: "text-red" },
             { label: "DNS", count: stats.dns_records, color: "text-text-muted" },
+            { label: "Screenshots", count: stats.screenshots, color: "text-purple-400" },
           ].map((s) => (
             <Card key={s.label} className="bg-surface">
               <CardContent className="p-3 text-center">
@@ -173,6 +319,7 @@ export function ResultsPage() {
                   <TableRow>
                     <TableHead>Value</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>Details</TableHead>
                     <TableHead>Seen</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -187,6 +334,14 @@ export function ResultsPage() {
                           {r.result_type}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        <MetadataDetails
+                          resultType={r.result_type}
+                          metadataJson={r.metadata_json}
+                          value={r.value}
+                          projectId={projectId}
+                        />
+                      </TableCell>
                       <TableCell className="text-text-muted">{r.count}x</TableCell>
                     </TableRow>
                   ))}
@@ -195,6 +350,22 @@ export function ResultsPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Screenshot lightbox */}
+      {lightbox && (
+        <Dialog open={!!lightbox} onOpenChange={(o) => !o && setLightbox(null)}>
+          <DialogContent className="sm:max-w-5xl p-2 bg-background">
+            <img
+              src={`/api/screenshots/${lightbox.projectId}/${lightbox.filename}`}
+              alt={lightbox.filename}
+              className="w-full h-auto rounded"
+            />
+            <div className="text-center text-xs text-text-muted mt-1 font-mono">
+              {lightbox.filename}
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

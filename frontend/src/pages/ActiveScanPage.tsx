@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,24 +26,11 @@ import {
 import { useScans } from "@/hooks/useScans";
 import { useProjects } from "@/hooks/useProjects";
 import { useTools } from "@/hooks/useSettings";
-import { SCAN_TOOLS } from "@/types/scan";
-import type { Scan, ToolDef, ScanResult } from "@/types/scan";
+import { SCAN_TOOLS, PIPELINE_PHASES, getToolDef } from "@/types/scan";
+import type { Scan, ToolDef } from "@/types/scan";
 import type { ToolStatus } from "@/types/settings";
-import api from "@/lib/api";
-
-// ─── Pipeline type from backend ─────────────────────────────────────
-interface PipelineStep {
-  tool: string;
-  type: string;
-  desc: string;
-}
-
-interface PipelineResponse {
-  category: string;
-  aggressiveness: string;
-  pipeline: PipelineStep[];
-  relevant_tools: string[];
-}
+import { ResultsModal } from "@/components/scans/ResultsModal";
+import { ConsolidationView } from "@/components/scans/ConsolidationView";
 
 // ─── Progress Bar ───────────────────────────────────────────────────
 function ScanProgress({ scan }: { scan: Scan }) {
@@ -70,80 +57,37 @@ function ScanProgress({ scan }: { scan: Scan }) {
   );
 }
 
-// ─── Live Results Panel ─────────────────────────────────────────────
-function LiveResults({ projectId, scanId, onClose }: { projectId: number; scanId: number; onClose: () => void }) {
-  const [results, setResults] = useState<ScanResult[]>([]);
-
-  const fetchResults = useCallback(async () => {
-    try {
-      const { data } = await api.get<ScanResult[]>(
-        `/projects/${projectId}/scans/${scanId}/results?limit=50`
-      );
-      setResults(data);
-    } catch { /* scan may have been deleted */ }
-  }, [projectId, scanId]);
-
-  useEffect(() => {
-    fetchResults();
-    const interval = setInterval(fetchResults, 2000);
-    return () => clearInterval(interval);
-  }, [fetchResults]);
-
-  return (
-    <div className="border border-border rounded bg-background p-3 h-full min-h-[200px] max-h-[300px] overflow-y-auto">
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-xs text-cyan font-bold">Results ({results.length})</span>
-        <Button variant="ghost" size="sm" className="h-5 text-xs text-text-muted" onClick={onClose}>
-          close
-        </Button>
-      </div>
-      <div className="space-y-0.5 font-mono text-xs">
-        {results.length === 0 && <span className="text-text-muted">Waiting for results...</span>}
-        {results.map((r) => (
-          <div key={r.id} className="text-text truncate">
-            <span className="text-green mr-2">&gt;</span>
-            {r.value}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Tool Card with Side-by-Side Results ────────────────────────────
+// ─── Tool Card (3-button layout) ────────────────────────────────────
 function ToolCard({
   tool,
   installed,
   latestScan,
-  projectId,
+  relevant,
   onScan,
   onCancel,
+  onResults,
+  onHistory,
 }: {
   tool: ToolDef;
   installed: boolean;
   latestScan: Scan | null;
-  projectId: number;
+  relevant: boolean;
   onScan: () => void;
   onCancel: () => void;
+  onResults: () => void;
+  onHistory: () => void;
 }) {
-  const [showResults, setShowResults] = useState(false);
   const isRunning = latestScan?.status === "running";
   const isCompleted = latestScan?.status === "completed";
   const isFailed = latestScan?.status === "failed";
 
-  // Auto-show results when scan starts
-  useEffect(() => {
-    if (isRunning) setShowResults(true);
-  }, [isRunning]);
-
   return (
-    <div className={`grid gap-3 ${showResults && latestScan ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
-      {/* Tool info card */}
-      <Card className="bg-surface border-border hover:border-cyan/40 transition-colors">
-        <CardContent className="p-4 flex flex-col h-full min-h-[180px]">
-          {/* Header */}
-          <div className="flex items-start justify-between mb-2">
-            <h3 className="text-sm font-bold text-cyan">{tool.label}</h3>
+    <Card className={`bg-surface border-border hover:border-cyan/40 transition-colors ${!relevant ? "opacity-40" : ""}`}>
+      <CardContent className="p-4 flex flex-col h-full min-h-[160px]">
+        {/* Header */}
+        <div className="flex items-start justify-between mb-2">
+          <h3 className="text-sm font-bold text-cyan">{tool.label}</h3>
+          <div className="flex gap-1">
             {installed ? (
               <Badge className="bg-green/15 text-green text-[10px] gap-1">
                 <CheckCircle className="w-2.5 h-2.5" /> installed
@@ -154,101 +98,114 @@ function ToolCard({
               </Badge>
             )}
           </div>
+        </div>
 
-          {/* Description */}
-          <p className="text-xs text-text-muted mb-3 leading-relaxed flex-1">
-            {tool.description}
-          </p>
+        {/* Description */}
+        <p className="text-xs text-text-muted mb-3 leading-relaxed flex-1">
+          {tool.description}
+        </p>
 
-          {/* Status */}
-          {latestScan && (
-            <div className="mb-3">
-              <div className="flex items-center gap-2 text-xs">
-                {isRunning && (
-                  <>
-                    <Loader2 className="w-3 h-3 text-cyan animate-spin" />
-                    <span className="text-cyan">Scanning...</span>
-                    <span className="text-text-muted ml-auto">{latestScan.result_count} found</span>
-                  </>
-                )}
-                {isCompleted && (
-                  <>
-                    <CheckCircle className="w-3 h-3 text-green" />
-                    <span className="text-green">Complete</span>
-                    <span className="text-text-muted ml-auto">{latestScan.result_count} results</span>
-                  </>
-                )}
-                {isFailed && (
-                  <>
-                    <XCircle className="w-3 h-3 text-red" />
-                    <span className="text-red">Failed</span>
-                  </>
-                )}
-              </div>
-              {isRunning && <ScanProgress scan={latestScan} />}
+        {/* Status */}
+        {latestScan && (
+          <div className="mb-3">
+            <div className="flex items-center gap-2 text-xs">
+              {isRunning && (
+                <>
+                  <Loader2 className="w-3 h-3 text-cyan animate-spin" />
+                  <span className="text-cyan">Scanning...</span>
+                  <span className="text-text-muted ml-auto">{latestScan.result_count} found</span>
+                </>
+              )}
+              {isCompleted && (
+                <>
+                  <CheckCircle className="w-3 h-3 text-green" />
+                  <span className="text-green">Complete</span>
+                  <span className="text-text-muted ml-auto">{latestScan.result_count} results</span>
+                </>
+              )}
+              {isFailed && (
+                <>
+                  <XCircle className="w-3 h-3 text-red" />
+                  <span className="text-red">Failed</span>
+                </>
+              )}
             </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex gap-2 mt-auto">
-            {isRunning ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1 border-red text-red hover:bg-red/10"
-                onClick={onCancel}
-              >
-                <Square className="w-3 h-3 mr-1" /> Cancel
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1 border-cyan text-cyan hover:bg-cyan/10"
-                onClick={onScan}
-                disabled={!installed || !projectId}
-              >
-                <Play className="w-3 h-3 mr-1" /> Scan
-              </Button>
-            )}
-            {latestScan && (latestScan.result_count > 0 || isRunning) && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-border text-text-muted hover:text-text"
-                onClick={() => setShowResults(!showResults)}
-              >
-                <Eye className="w-3 h-3" />
-              </Button>
-            )}
+            {isRunning && <ScanProgress scan={latestScan} />}
           </div>
-        </CardContent>
-      </Card>
+        )}
 
-      {/* Side-by-side results panel */}
-      {showResults && latestScan && projectId > 0 && (
-        <LiveResults
-          projectId={projectId}
-          scanId={latestScan.id}
-          onClose={() => setShowResults(false)}
-        />
-      )}
-    </div>
+        {/* 3-button action bar */}
+        <div className="flex gap-1.5 mt-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 border-border text-text-muted hover:text-text text-xs"
+            onClick={onHistory}
+          >
+            <History className="w-3 h-3 mr-1" /> History
+          </Button>
+          {isRunning ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 border-red text-red hover:bg-red/10 text-xs"
+              onClick={onCancel}
+            >
+              <Square className="w-3 h-3 mr-1" /> Cancel
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 border-cyan text-cyan hover:bg-cyan/10 text-xs"
+              onClick={onScan}
+              disabled={!installed || !relevant}
+            >
+              <Play className="w-3 h-3 mr-1" /> Scan
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 border-border text-text-muted hover:text-text text-xs"
+            onClick={onResults}
+            disabled={!latestScan || latestScan.result_count === 0}
+          >
+            <Eye className="w-3 h-3 mr-1" /> Results
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
 // ─── Scan History ───────────────────────────────────────────────────
-function ScanHistory({ scans, onDelete }: { scans: Scan[]; onDelete: (id: number) => void }) {
-  if (scans.length === 0) return null;
+function ScanHistory({
+  scans,
+  onDelete,
+  filterTool,
+}: {
+  scans: Scan[];
+  onDelete: (id: number) => void;
+  filterTool: string | null;
+}) {
+  const filtered = filterTool
+    ? scans.filter((s) => s.tool_name === filterTool)
+    : scans;
+
+  if (filtered.length === 0) return null;
 
   return (
     <Card className="bg-surface border-border">
       <CardContent className="p-4">
         <h3 className="text-sm font-bold text-text-muted mb-3 flex items-center gap-2">
           <History className="w-4 h-4" /> Recent Scans
+          {filterTool && (
+            <Badge variant="secondary" className="text-xs">{filterTool}</Badge>
+          )}
         </h3>
         <div className="space-y-1 max-h-64 overflow-y-auto">
-          {scans.slice(0, 20).map((scan) => (
+          {filtered.slice(0, 20).map((scan) => (
             <div key={scan.id} className="flex items-center gap-3 text-xs py-1.5 border-b border-border/50 last:border-0">
               <span className="font-mono text-cyan w-24">{scan.tool_name}</span>
               <StatusDot status={scan.status} />
@@ -324,32 +281,31 @@ function OverallProgress({ scans }: { scans: Scan[] }) {
   );
 }
 
+// ─── Consolidation: imported from ConsolidationView ─────────────────
+
 // ─── Main Page ──────────────────────────────────────────────────────
 export function ActiveScanPage() {
   const { projects } = useProjects();
   const { tools: toolStatus } = useTools();
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [targetOverride, setTargetOverride] = useState("");
-  const [relevantTools, setRelevantTools] = useState<string[]>([]);
   const [autoScanning, setAutoScanning] = useState(false);
   const [quickScanning, setQuickScanning] = useState(false);
   const [deepScanning, setDeepScanning] = useState(false);
   const [portConfig, setPortConfig] = useState("");
   const [showPortConfig, setShowPortConfig] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<string | null>(null);
+
+  // Results modal state
+  const [resultsModal, setResultsModal] = useState<{
+    open: boolean;
+    scanId: number;
+    toolName: string;
+    isRunning: boolean;
+  }>({ open: false, scanId: 0, toolName: "", isRunning: false });
 
   const projectId = selectedProject ? Number(selectedProject) : 0;
   const { scans, startScan, cancelScan, deleteScan, autoScan, quickScan, deepScan } = useScans(projectId || -1);
-
-  // Fetch pipeline/relevant tools when project changes
-  useEffect(() => {
-    if (!projectId) {
-      setRelevantTools([]);
-      return;
-    }
-    api.get<PipelineResponse>(`/projects/${projectId}/scans/pipeline`)
-      .then(({ data }) => setRelevantTools(data.relevant_tools))
-      .catch(() => setRelevantTools(SCAN_TOOLS.map((t) => t.value)));
-  }, [projectId]);
 
   // Map tool status by name
   const toolMap: Record<string, ToolStatus> = {};
@@ -365,17 +321,9 @@ export function ActiveScanPage() {
     }
   }
 
-  // Filter SCAN_TOOLS to only show relevant ones for this project category
-  const filteredTools = relevantTools.length > 0
-    ? SCAN_TOOLS.filter((t) => relevantTools.includes(t.value))
-    : SCAN_TOOLS;
-
-  // Group filtered tools by category
-  const categories: Record<string, ToolDef[]> = {};
-  for (const tool of filteredTools) {
-    if (!categories[tool.category]) categories[tool.category] = [];
-    categories[tool.category].push(tool);
-  }
+  const selectedProjectData = projects.find((p) => String(p.id) === selectedProject);
+  const projectCategory = selectedProjectData?.category || "";
+  const isIpBased = selectedProjectData && ["single_ip", "cidr_range", "ip_list"].includes(selectedProjectData.category);
 
   const handleScan = async (tool: ToolDef) => {
     if (!projectId) return;
@@ -387,6 +335,17 @@ export function ActiveScanPage() {
     if (scan && scan.status === "running") {
       await cancelScan(scan.id);
     }
+  };
+
+  const handleOpenResults = (tool: ToolDef) => {
+    const scan = latestScanByTool[tool.value];
+    if (!scan) return;
+    setResultsModal({
+      open: true,
+      scanId: scan.id,
+      toolName: tool.value,
+      isRunning: scan.status === "running",
+    });
   };
 
   const portsArg = portConfig.trim() || undefined;
@@ -420,9 +379,6 @@ export function ActiveScanPage() {
       setDeepScanning(false);
     }
   };
-
-  const selectedProjectData = projects.find((p) => String(p.id) === selectedProject);
-  const isIpBased = selectedProjectData && ["single_ip", "cidr_range", "ip_list"].includes(selectedProjectData.category);
 
   return (
     <div className="space-y-6">
@@ -516,7 +472,7 @@ export function ActiveScanPage() {
               </div>
             </div>
 
-            {/* Port Configuration — shown for IP-based project categories */}
+            {/* Port Configuration */}
             {isIpBased && (
               <div className="border-t border-border pt-3">
                 <button
@@ -525,7 +481,7 @@ export function ActiveScanPage() {
                 >
                   <Settings2 className="w-3 h-3" />
                   Port Configuration
-                  <span className="text-[10px]">{showPortConfig ? "▲" : "▼"}</span>
+                  <span className="text-[10px]">{showPortConfig ? "\u25B2" : "\u25BC"}</span>
                   {portConfig && (
                     <Badge variant="secondary" className="text-[10px] ml-1">
                       {portConfig.length > 30 ? portConfig.slice(0, 30) + "..." : portConfig}
@@ -582,30 +538,71 @@ export function ActiveScanPage() {
       {/* Overall progress */}
       {projectId > 0 && scans.length > 0 && <OverallProgress scans={scans} />}
 
-      {/* Tool cards by category */}
-      {projectId > 0 && Object.entries(categories).map(([category, categoryTools]) => (
-        <div key={category}>
-          <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">
-            {category}
-          </h2>
-          <div className="space-y-4">
-            {categoryTools.map((tool) => (
-              <ToolCard
-                key={tool.value}
-                tool={tool}
-                installed={toolMap[tool.value]?.installed ?? false}
-                latestScan={latestScanByTool[tool.value] || null}
-                projectId={projectId}
-                onScan={() => handleScan(tool)}
-                onCancel={() => handleCancel(tool)}
-              />
-            ))}
+      {/* Pipeline Phases — all tools always visible */}
+      {projectId > 0 && PIPELINE_PHASES.map((phase) => {
+        const isRelevant = phase.applicableCategories.includes(projectCategory);
+        const phaseTools = phase.tools
+          .map((name) => getToolDef(name))
+          .filter((t): t is ToolDef => t !== undefined);
+
+        return (
+          <div key={phase.phase} className={!isRelevant ? "opacity-40" : ""}>
+            <div className="flex items-center gap-3 mb-3">
+              <span className="text-xs font-bold text-cyan bg-cyan/10 w-6 h-6 rounded-full flex items-center justify-center">
+                {phase.phase}
+              </span>
+              <div>
+                <h2 className="text-xs font-bold text-text-muted uppercase tracking-wider">
+                  {phase.name}
+                </h2>
+                <p className="text-[10px] text-text-muted">{phase.description}</p>
+              </div>
+              {!isRelevant && (
+                <Badge variant="secondary" className="text-[10px] ml-auto">
+                  not applicable
+                </Badge>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {phaseTools.map((tool) => (
+                <ToolCard
+                  key={tool.value}
+                  tool={tool}
+                  installed={toolMap[tool.value]?.installed ?? false}
+                  latestScan={latestScanByTool[tool.value] || null}
+                  relevant={isRelevant}
+                  onScan={() => handleScan(tool)}
+                  onCancel={() => handleCancel(tool)}
+                  onResults={() => handleOpenResults(tool)}
+                  onHistory={() => setHistoryFilter(historyFilter === tool.value ? null : tool.value)}
+                />
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
+
+      {/* Consolidation section */}
+      {projectId > 0 && <ConsolidationView projectId={projectId} />}
 
       {/* Scan history */}
-      {projectId > 0 && <ScanHistory scans={scans} onDelete={deleteScan} />}
+      {projectId > 0 && (
+        <ScanHistory
+          scans={scans}
+          onDelete={deleteScan}
+          filterTool={historyFilter}
+        />
+      )}
+
+      {/* Results Modal */}
+      <ResultsModal
+        open={resultsModal.open}
+        onClose={() => setResultsModal((s) => ({ ...s, open: false }))}
+        projectId={projectId}
+        scanId={resultsModal.scanId}
+        toolName={resultsModal.toolName}
+        isRunning={resultsModal.isRunning}
+      />
     </div>
   );
 }
