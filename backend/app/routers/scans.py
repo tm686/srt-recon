@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.engine import get_db
 from app.db.models import Project, Scan, ScanResult, ScanStatus
 from app.schemas.scan import ScanCreate, ScanOut, ScanResultOut, ScanListOut, ScanLaunchConfig
-from app.services.scan_runner import start_scan, cancel_scan, get_running_scan_ids
+from app.services.scan_runner import start_scan, start_pipeline, cancel_scan, get_running_scan_ids
 from app.services.autoscan import get_pipeline, get_quick_pipeline, get_deep_pipeline, get_threads, get_tools_for_category
 from app.services.settings_service import get_setting
 
@@ -96,6 +96,7 @@ async def quick_scan(
 
     pipeline = get_quick_pipeline(project.category.value)
     created_scans = []
+    pipeline_steps = []
 
     for step in pipeline:
         scan = Scan(
@@ -109,22 +110,22 @@ async def quick_scan(
         await db.refresh(scan)
 
         opts: dict = {"threads": threads}
-        # Quick scan overrides
         if step["tool"] == "nmap":
             opts["ports"] = config.ports if config and config.ports else "--top-ports 100"
         if step["tool"] == "nuclei":
             opts["severity"] = "high,critical"
 
-        await start_scan(
-            scan_id=scan.id,
-            project_id=project_id,
-            tool_name=step["tool"],
-            scan_type=step["type"],
-            target_override=None,
-            options=opts,
-        )
+        pipeline_steps.append({
+            "scan_id": scan.id,
+            "project_id": project_id,
+            "tool_name": step["tool"],
+            "scan_type": step["type"],
+            "target_override": None,
+            "options": opts,
+        })
         created_scans.append(_scan_to_out(scan))
 
+    await start_pipeline(pipeline_steps)
     return created_scans
 
 
@@ -146,6 +147,7 @@ async def auto_scan(
 
     pipeline = get_pipeline(project.category.value, aggressiveness)
     created_scans = []
+    pipeline_steps = []
 
     for step in pipeline:
         scan = Scan(
@@ -162,16 +164,17 @@ async def auto_scan(
         if step["tool"] == "nmap" and config and config.ports:
             opts["ports"] = config.ports
 
-        await start_scan(
-            scan_id=scan.id,
-            project_id=project_id,
-            tool_name=step["tool"],
-            scan_type=step["type"],
-            target_override=None,
-            options=opts,
-        )
+        pipeline_steps.append({
+            "scan_id": scan.id,
+            "project_id": project_id,
+            "tool_name": step["tool"],
+            "scan_type": step["type"],
+            "target_override": None,
+            "options": opts,
+        })
         created_scans.append(_scan_to_out(scan))
 
+    await start_pipeline(pipeline_steps)
     return created_scans
 
 
@@ -199,6 +202,8 @@ async def deep_scan(
     # Only override if user explicitly set one; otherwise use deep default
     ffuf_wordlist = wl_setting if wl_setting else deep_wordlist
 
+    pipeline_steps = []
+
     for step in pipeline:
         scan = Scan(
             project_id=project_id,
@@ -220,16 +225,17 @@ async def deep_scan(
         if step["tool"] == "katana":
             opts["depth"] = 5
 
-        await start_scan(
-            scan_id=scan.id,
-            project_id=project_id,
-            tool_name=step["tool"],
-            scan_type=step["type"],
-            target_override=None,
-            options=opts,
-        )
+        pipeline_steps.append({
+            "scan_id": scan.id,
+            "project_id": project_id,
+            "tool_name": step["tool"],
+            "scan_type": step["type"],
+            "target_override": None,
+            "options": opts,
+        })
         created_scans.append(_scan_to_out(scan))
 
+    await start_pipeline(pipeline_steps)
     return created_scans
 
 

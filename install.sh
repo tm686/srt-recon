@@ -15,6 +15,46 @@ step() { echo -e "${YELLOW}[>]${NC} $1"; }
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 CONF="$ROOT/srt-recon.conf"
 
+# ── VDI/proxy SSL fix ────────────────────────────────────────────────
+# Corporate VDIs often MITM HTTPS traffic. We grab the proxy's CA cert
+# and install it so Go, uv, curl, and npm all trust it.
+fix_ssl() {
+    # Always set these as fallbacks
+    export GIT_SSL_NO_VERIFY=1
+    export GONOSUMCHECK="*"
+    export GONOSUMDB="*"
+    export GOINSECURE="*"
+    export GOPROXY="direct"
+    export NODE_TLS_REJECT_UNAUTHORIZED=0
+    if ! grep -q "^insecure" ~/.curlrc 2>/dev/null; then
+        echo "insecure" >> ~/.curlrc
+    fi
+
+    # Try to capture the proxy's CA cert and install it system-wide
+    if ! openssl s_client -connect pypi.org:443 -servername pypi.org </dev/null 2>/dev/null | openssl x509 -noout 2>/dev/null; then
+        info "SSL verification works already, skipping proxy cert install"
+        return
+    fi
+
+    # Extract the proxy/MITM CA cert (last cert in the chain)
+    local proxy_cert
+    proxy_cert=$(echo | openssl s_client -connect pypi.org:443 -servername pypi.org -showcerts 2>/dev/null \
+        | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{ print }' | tail -n +1)
+
+    if [ -n "$proxy_cert" ] && [ ! -f /usr/local/share/ca-certificates/vdi-proxy.crt ]; then
+        step "Installing VDI proxy CA certificate into system trust store..."
+        echo "$proxy_cert" | sudo tee /usr/local/share/ca-certificates/vdi-proxy.crt >/dev/null 2>&1
+        sudo update-ca-certificates 2>/dev/null && log "Proxy CA cert installed" || warn "Could not install proxy cert (no sudo?)"
+    fi
+
+    # Point Go and Python at the system bundle
+    if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+        export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+        export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    fi
+}
+fix_ssl
+
 # ── Load config if present ───────────────────────────────────────────
 if [ -f "$CONF" ]; then
     info "Loading config from $CONF"
@@ -52,7 +92,7 @@ check_prereqs() {
     # Check uv
     if ! command -v uv &>/dev/null; then
         step "Installing uv (Python package manager)..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -kLsSf https://astral.sh/uv/install.sh | sh
         export PATH="$HOME/.local/bin:$PATH"
     fi
     info "uv: $(command -v uv)"
@@ -145,7 +185,7 @@ install_wordlists() {
     mkdir -p "$ROOT/wordlists"
     for f in ffuf-wordlist-5000.txt ffuf-wordlist-default-long.txt ffuf-wordlist-default-small.txt; do
         step "Fetching $f..."
-        curl -sL "https://raw.githubusercontent.com/R-s0n/ars0n-framework-v2/main/wordlists/$f" -o "$ROOT/wordlists/$f" \
+        curl -skL "https://raw.githubusercontent.com/R-s0n/ars0n-framework-v2/main/wordlists/$f" -o "$ROOT/wordlists/$f" \
             || warn "Failed to download $f"
     done
     log "Wordlists ready"
@@ -155,7 +195,7 @@ install_wordlists() {
 install_backend() {
     log "Setting up Python backend..."
     cd "$ROOT/backend"
-    uv sync
+    uv sync --native-tls || uv sync --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org
     log "Backend ready"
 }
 
@@ -163,7 +203,7 @@ install_backend() {
 install_frontend() {
     log "Setting up frontend..."
     cd "$ROOT/frontend"
-    npm install --silent
+    npm install --silent 2>/dev/null || npm install --strict-ssl=false --silent
     log "Frontend ready"
 }
 

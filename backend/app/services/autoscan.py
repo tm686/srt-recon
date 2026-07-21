@@ -20,6 +20,7 @@ PIPELINES: dict[str, list[dict]] = {
         {"tool": "katana", "type": "url_crawl", "desc": "Active crawling + JS parsing"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory brute-forcing"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.single_host: [
         {"tool": "httpx", "type": "live_hosts", "desc": "Probe host details"},
@@ -28,22 +29,26 @@ PIPELINES: dict[str, list[dict]] = {
         {"tool": "waybackurls", "type": "url_crawl", "desc": "Wayback Machine URLs"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory brute-forcing"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.single_ip: [
         {"tool": "nmap", "type": "port_scan", "desc": "Port + service discovery"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.cidr_range: [
         {"tool": "nmap", "type": "port_scan", "desc": "Port scanning the range"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.ip_list: [
         {"tool": "nmap", "type": "port_scan", "desc": "Port + service discovery"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory brute-forcing"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
 }
 
@@ -64,9 +69,7 @@ AGGRESSIVE_EXTRAS: dict[str, list[dict]] = {
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing on open ports"},
     ],
     ProjectCategory.cidr_range: [],
-    ProjectCategory.ip_list: [
-        {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing on discovered services"},
-    ],
+    ProjectCategory.ip_list: [],
 }
 
 
@@ -76,8 +79,8 @@ def get_pipeline(category: str, aggressiveness: str = "normal") -> list[dict]:
 
     if aggressiveness == "aggressive":
         extras = AGGRESSIVE_EXTRAS.get(category, [])
-        # Insert extras before the final nuclei scan
-        insert_idx = len(pipeline) - 1  # before last (nuclei)
+        # Insert extras before the final step (gowitness)
+        insert_idx = len(pipeline) - 1
         for extra in extras:
             pipeline.insert(insert_idx, extra)
             insert_idx += 1
@@ -108,25 +111,30 @@ QUICK_PIPELINES: dict[str, list[dict]] = {
         {"tool": "subfinder", "type": "subdomain_enum", "desc": "Passive subdomain discovery"},
         {"tool": "httpx", "type": "live_hosts", "desc": "Probe live HTTP servers"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (small wordlist)"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.single_host: [
         {"tool": "httpx", "type": "live_hosts", "desc": "Probe host details"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (small wordlist)"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scan (high+critical)"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.single_ip: [
         {"tool": "nmap", "type": "port_scan", "desc": "Port scan (top 100)"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scan (high+critical)"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.cidr_range: [
         {"tool": "nmap", "type": "port_scan", "desc": "Port scan (top 100)"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.ip_list: [
         {"tool": "nmap", "type": "port_scan", "desc": "Port scan (top 100)"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Vulnerability scan (high+critical)"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
 }
 
@@ -142,6 +150,7 @@ DEEP_PIPELINES: dict[str, list[dict]] = {
     ProjectCategory.wildcard_domain: [
         {"tool": "subfinder", "type": "subdomain_enum", "desc": "Passive subdomain discovery"},
         {"tool": "assetfinder", "type": "subdomain_enum", "desc": "Additional subdomain sources"},
+        {"tool": "alterx", "type": "subdomain_enum", "desc": "Subdomain permutation wordlists"},
         {"tool": "dnsx", "type": "dns_resolution", "desc": "DNS resolution + wildcard filtering"},
         {"tool": "httpx", "type": "live_hosts", "desc": "Probe live HTTP servers"},
         {"tool": "gau", "type": "url_crawl", "desc": "Historical URL collection"},
@@ -149,6 +158,9 @@ DEEP_PIPELINES: dict[str, list[dict]] = {
         {"tool": "waybackurls", "type": "url_crawl", "desc": "Wayback Machine URLs"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (long wordlist)"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Full vulnerability scanning"},
+        {"tool": "dalfox", "type": "vuln_scan", "desc": "XSS vulnerability scanning"},
+        {"tool": "subjack", "type": "vuln_scan", "desc": "Subdomain takeover checking"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.single_host: [
         {"tool": "httpx", "type": "live_hosts", "desc": "Probe host details"},
@@ -157,24 +169,33 @@ DEEP_PIPELINES: dict[str, list[dict]] = {
         {"tool": "waybackurls", "type": "url_crawl", "desc": "Wayback Machine URLs"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (long wordlist)"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Full vulnerability scanning"},
+        {"tool": "dalfox", "type": "vuln_scan", "desc": "XSS vulnerability scanning"},
+        {"tool": "subjack", "type": "vuln_scan", "desc": "Subdomain takeover checking"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.single_ip: [
         {"tool": "nmap", "type": "port_scan", "desc": "Full port scan (all ports)"},
+        {"tool": "rustscan", "type": "port_scan", "desc": "Fast port scanning"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (long wordlist)"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Full vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.cidr_range: [
         {"tool": "nmap", "type": "port_scan", "desc": "Full port scan (all ports)"},
+        {"tool": "rustscan", "type": "port_scan", "desc": "Fast port scanning"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (long wordlist)"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Full vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
     ProjectCategory.ip_list: [
         {"tool": "nmap", "type": "port_scan", "desc": "Full port scan (all ports)"},
+        {"tool": "rustscan", "type": "port_scan", "desc": "Fast port scanning"},
         {"tool": "httpx", "type": "live_hosts", "desc": "HTTP service detection"},
         {"tool": "ffuf", "type": "dir_fuzz", "desc": "Directory fuzzing (long wordlist)"},
         {"tool": "nuclei", "type": "vuln_scan", "desc": "Full vulnerability scanning"},
+        {"tool": "gowitness", "type": "screenshot", "desc": "Capture screenshots of live hosts"},
     ],
 }
 
