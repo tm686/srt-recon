@@ -91,8 +91,18 @@ def _build_katana(targets: list[str], opts: dict) -> list[str]:
 
 def _build_nmap(targets: list[str], opts: dict) -> list[str]:
     ports = opts.get("ports", "1-1000")
-    cmd = ["nmap", "-sV", "-T4", "--open", "-oG", "-",
-           "--max-retries", "2", "--host-timeout", "300s"]
+    scan_speed = opts.get("scan_speed", "normal")  # stealth | normal | aggressive
+
+    if scan_speed == "stealth":
+        timing, max_rate, max_retries = "-T2", "100", "1"
+    elif scan_speed == "aggressive":
+        timing, max_rate, max_retries = "-T4", "5000", "2"
+    else:  # normal
+        timing, max_rate, max_retries = "-T3", "1000", "2"
+
+    cmd = ["nmap", "-sV", timing, "--open", "-oG", "-",
+           "--max-rate", max_rate,
+           "--max-retries", max_retries, "--host-timeout", "300s"]
     if str(ports).startswith("--top-ports"):
         cmd += ports.split()
     else:
@@ -183,8 +193,18 @@ def _build_subjack(targets: list[str], opts: dict) -> list[str]:
 
 
 def _build_rustscan(targets: list[str], opts: dict) -> list[str]:
-    batch_size = opts.get("batch_size", 4500)
-    timeout = opts.get("timeout", 2000)
+    scan_speed = opts.get("scan_speed", "normal")
+
+    if scan_speed == "stealth":
+        batch_size = opts.get("batch_size", 500)
+        timeout = opts.get("timeout", 3000)
+    elif scan_speed == "aggressive":
+        batch_size = opts.get("batch_size", 4500)
+        timeout = opts.get("timeout", 2000)
+    else:  # normal
+        batch_size = opts.get("batch_size", 1500)
+        timeout = opts.get("timeout", 2000)
+
     cmd = ["rustscan",
            "-a", ",".join(targets),
            "--ulimit", "5000",

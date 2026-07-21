@@ -110,6 +110,8 @@ async def quick_scan(
         await db.refresh(scan)
 
         opts: dict = {"threads": threads}
+        if config and config.scan_speed:
+            opts["scan_speed"] = config.scan_speed
         if step["tool"] == "nmap":
             opts["ports"] = config.ports if config and config.ports else "--top-ports 100"
         if step["tool"] == "nuclei":
@@ -161,6 +163,8 @@ async def auto_scan(
         await db.refresh(scan)
 
         opts: dict = {"threads": threads}
+        if config and config.scan_speed:
+            opts["scan_speed"] = config.scan_speed
         if step["tool"] == "nmap" and config and config.ports:
             opts["ports"] = config.ports
 
@@ -216,6 +220,8 @@ async def deep_scan(
         await db.refresh(scan)
 
         opts: dict = {"threads": threads}
+        if config and config.scan_speed:
+            opts["scan_speed"] = config.scan_speed
         if step["tool"] == "nmap":
             opts["ports"] = config.ports if config and config.ports else "1-65535"
         if step["tool"] == "ffuf":

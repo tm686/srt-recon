@@ -293,6 +293,7 @@ export function ActiveScanPage() {
   const [quickScanning, setQuickScanning] = useState(false);
   const [deepScanning, setDeepScanning] = useState(false);
   const [portConfig, setPortConfig] = useState("");
+  const [scanSpeed, setScanSpeed] = useState("normal");
   const [showPortConfig, setShowPortConfig] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<string | null>(null);
 
@@ -354,7 +355,7 @@ export function ActiveScanPage() {
     if (!projectId) return;
     setAutoScanning(true);
     try {
-      await autoScan(portsArg);
+      await autoScan(portsArg, scanSpeed);
     } finally {
       setAutoScanning(false);
     }
@@ -364,7 +365,7 @@ export function ActiveScanPage() {
     if (!projectId) return;
     setQuickScanning(true);
     try {
-      await quickScan(portsArg);
+      await quickScan(portsArg, scanSpeed);
     } finally {
       setQuickScanning(false);
     }
@@ -374,7 +375,7 @@ export function ActiveScanPage() {
     if (!projectId) return;
     setDeepScanning(true);
     try {
-      await deepScan(portsArg);
+      await deepScan(portsArg, scanSpeed);
     } finally {
       setDeepScanning(false);
     }
@@ -531,6 +532,42 @@ export function ActiveScanPage() {
                 )}
               </div>
             )}
+
+            {/* Scan Speed */}
+            <div className="border-t border-border pt-3">
+              <div className="flex items-center gap-2 text-xs text-text-muted mb-2">
+                <Settings2 className="w-3 h-3" />
+                Scan Speed
+                <Badge variant="secondary" className="text-[10px] ml-1">{scanSpeed}</Badge>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: "Stealth", value: "stealth", desc: "Slow + low rate — avoids IP bans" },
+                  { label: "Normal", value: "normal", desc: "Balanced speed and detection risk" },
+                  { label: "Aggressive", value: "aggressive", desc: "Fast but loud — may trigger IDS" },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setScanSpeed(opt.value)}
+                    title={opt.desc}
+                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                      scanSpeed === opt.value
+                        ? opt.value === "stealth"
+                          ? "border-green bg-green/10 text-green"
+                          : opt.value === "aggressive"
+                            ? "border-red bg-red/10 text-red"
+                            : "border-cyan bg-cyan/10 text-cyan"
+                        : "border-border text-text-muted hover:border-cyan/40"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-text-muted mt-1">
+                Stealth: nmap -T2 + 100pps, batch 500 | Normal: -T3 + 1000pps | Aggressive: -T4 + 5000pps
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}

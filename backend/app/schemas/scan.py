@@ -42,3 +42,4 @@ class ScanListOut(BaseModel):
 class ScanLaunchConfig(BaseModel):
     """Optional configuration for quick/auto/deep scan launches."""
     ports: str | None = None  # e.g. "80,443", "1-1000", "--top-ports 100"
+    scan_speed: str = "normal"  # "stealth" | "normal" | "aggressive"

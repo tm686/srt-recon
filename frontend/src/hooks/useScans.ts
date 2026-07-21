@@ -51,18 +51,27 @@ export function useScans(projectId: number) {
     await fetch();
   };
 
-  const autoScan = async (ports?: string) => {
-    await api.post(`/projects/${projectId}/scans/auto`, ports ? { ports } : {});
+  const autoScan = async (ports?: string, scanSpeed?: string) => {
+    const body: Record<string, string> = {};
+    if (ports) body.ports = ports;
+    if (scanSpeed) body.scan_speed = scanSpeed;
+    await api.post(`/projects/${projectId}/scans/auto`, body);
     await fetch();
   };
 
-  const quickScan = async (ports?: string) => {
-    await api.post(`/projects/${projectId}/scans/quick`, ports ? { ports } : {});
+  const quickScan = async (ports?: string, scanSpeed?: string) => {
+    const body: Record<string, string> = {};
+    if (ports) body.ports = ports;
+    if (scanSpeed) body.scan_speed = scanSpeed;
+    await api.post(`/projects/${projectId}/scans/quick`, body);
     await fetch();
   };
 
-  const deepScan = async (ports?: string) => {
-    await api.post(`/projects/${projectId}/scans/deep`, ports ? { ports } : {});
+  const deepScan = async (ports?: string, scanSpeed?: string) => {
+    const body: Record<string, string> = {};
+    if (ports) body.ports = ports;
+    if (scanSpeed) body.scan_speed = scanSpeed;
+    await api.post(`/projects/${projectId}/scans/deep`, body);
     await fetch();
   };
 
