@@ -140,8 +140,13 @@ def _build_nuclei(targets: list[str], opts: dict) -> list[str]:
            "-mhe", "30",       # skip host after 30 errors
            "-fr",              # follow redirects
            "-bs", "25"]        # bulk size
-    for t in targets:
-        cmd += ["-u", t]
+    # Use -l (list file) when there are many targets (chained results)
+    target_file = opts.get("_target_file")
+    if target_file:
+        cmd += ["-l", target_file]
+    else:
+        for t in targets:
+            cmd += ["-u", t]
     return cmd
 
 
@@ -434,6 +439,108 @@ def _parse_ffuf_json(text: str) -> list[tuple[str, str, str]]:
     return results
 
 
+# ── Pipeline data chaining ──────────────────────────────────────────
+# Queries previous scan results so downstream tools feed from upstream
+# discoveries instead of just the raw project targets.
+
+async def _get_previous_results(
+    db: AsyncSession,
+    project_id: int,
+    result_types: list[str],
+) -> list[str]:
+    """Fetch deduplicated result values of given types from all scans in this project."""
+    stmt = (
+        select(ScanResult.value)
+        .join(Scan)
+        .where(Scan.project_id == project_id)
+        .where(ScanResult.result_type.in_(result_types))
+        .distinct()
+    )
+    rows = await db.execute(stmt)
+    return [row[0] for row in rows.all()]
+
+
+def _ports_to_http_targets(port_values: list[str]) -> list[str]:
+    """Convert host:port strings into HTTP URLs for probing.
+    Common HTTP ports get https://, others get http://.
+    """
+    https_ports = {"443", "8443", "4443", "9443"}
+    urls = []
+    for hp in port_values:
+        if ":" not in hp:
+            continue
+        host, port = hp.rsplit(":", 1)
+        scheme = "https" if port in https_ports else "http"
+        # Skip default ports in URL to avoid duplicates
+        if (scheme == "http" and port == "80") or (scheme == "https" and port == "443"):
+            urls.append(f"{scheme}://{host}")
+        else:
+            urls.append(f"{scheme}://{host}:{port}")
+    return urls
+
+
+async def _resolve_chained_targets(
+    db: AsyncSession,
+    project_id: int,
+    tool_name: str,
+    targets: list[str],
+) -> list[str] | None:
+    """For tools that should feed from previous results, return the
+    chained target list.  Returns None if no chaining applies (use raw targets).
+    Falls back to raw targets if no upstream results exist yet.
+    """
+
+    if tool_name == "httpx":
+        # Feed from: subdomains + port scan results (as http URLs)
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        ports = await _get_previous_results(db, project_id, ["port"])
+        chained = list(set(subs + _ports_to_http_targets(ports)))
+        if chained:
+            return chained
+        # Fall back: strip wildcards from targets
+        return [t.lstrip("*.") for t in targets]
+
+    if tool_name == "dnsx":
+        # Feed from: subdomains
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        if subs:
+            return subs
+        return [t.lstrip("*.") for t in targets]
+
+    if tool_name == "katana":
+        # Feed from: live_hosts (httpx URLs)
+        live = await _get_previous_results(db, project_id, ["live_host"])
+        if live:
+            return live
+        return [t if t.startswith("http") else f"https://{t}" for t in targets]
+
+    if tool_name == "ffuf":
+        # Feed from: live_hosts — fuzz each discovered web host
+        live = await _get_previous_results(db, project_id, ["live_host"])
+        if live:
+            return live
+        return None  # use raw targets (default behavior)
+
+    if tool_name == "nuclei":
+        # Feed from: live_hosts + URLs + directories — scan everything discovered
+        live = await _get_previous_results(db, project_id, ["live_host"])
+        urls = await _get_previous_results(db, project_id, ["url"])
+        dirs = await _get_previous_results(db, project_id, ["directory"])
+        chained = list(set(live + urls + dirs))
+        if chained:
+            return chained
+        return [t if t.startswith("http") else f"https://{t}" for t in targets]
+
+    if tool_name == "gau":
+        # Feed from: subdomains for broader URL discovery
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        if subs:
+            return subs
+        return [t.lstrip("*.") for t in targets]
+
+    return None  # No chaining — use raw targets
+
+
 # ── Core scan execution ─────────────────────────────────────────────
 
 async def start_scan(
@@ -524,6 +631,15 @@ async def _run_scan(
                 await db.commit()
                 return
 
+            # Chain targets from previous scan results when available
+            chained = await _resolve_chained_targets(db, project_id, tool_name, targets)
+            if chained is not None:
+                # For tools that read from stdin or accept -u, replace targets
+                # Keep original targets for scope enforcement
+                chained_targets = chained
+            else:
+                chained_targets = None
+
             # Build scope enforcer for output filtering
             result = await db.execute(
                 select(Target).where(Target.project_id == project_id)
@@ -565,6 +681,10 @@ async def _run_scan(
             if tool_name in ("httpx", "dnsx"):
                 if options.get("stdin_targets"):
                     stdin_data = "\n".join(options["stdin_targets"]).encode()
+                elif chained_targets:
+                    stdin_data = "\n".join(chained_targets).encode()
+                    logger.info("Scan %d: %s chained from %d previous results",
+                                scan_id, tool_name, len(chained_targets))
                 else:
                     stdin_data = "\n".join(
                         t.lstrip("*.") for t in targets
@@ -598,6 +718,40 @@ async def _run_scan(
                         for t in targets
                     ]
                 stdin_data = "\n".join(urls).encode()
+            elif tool_name == "nuclei" and chained_targets:
+                # Write chained targets to a file for nuclei -l
+                target_file = f"/tmp/nuclei_{project_id}_{scan_id}.txt"
+                Path(target_file).write_text("\n".join(chained_targets))
+                options["_target_file"] = target_file
+                logger.info("Scan %d: nuclei chained from %d targets (live_hosts + URLs + dirs)",
+                            scan_id, len(chained_targets))
+                # Rebuild command with target file
+                cmd = builder(targets, options)
+                cmd[0] = tool_path
+                scan.command = " ".join(cmd)
+                await db.commit()
+            elif tool_name == "katana" and chained_targets:
+                # Rebuild katana with chained live hosts
+                cmd = builder(chained_targets, options)
+                cmd[0] = tool_path
+                scan.command = " ".join(cmd)
+                logger.info("Scan %d: katana chained from %d live hosts",
+                            scan_id, len(chained_targets))
+                await db.commit()
+            elif tool_name == "ffuf" and chained_targets:
+                # ffuf fuzzes one host at a time — we'll run against each live host
+                # Store the chained list for multi-target ffuf handling
+                options["_chained_hosts"] = chained_targets
+                logger.info("Scan %d: ffuf chained from %d live hosts",
+                            scan_id, len(chained_targets))
+            elif tool_name == "gau" and chained_targets:
+                # Rebuild gau with discovered subdomains
+                cmd = builder(chained_targets, options)
+                cmd[0] = tool_path
+                scan.command = " ".join(cmd)
+                logger.info("Scan %d: gau chained from %d subdomains",
+                            scan_id, len(chained_targets))
+                await db.commit()
             elif tool_name == "subjack":
                 # subjack reads from a file; write targets to temp file
                 input_file = f"/tmp/subjack_{project_id}.txt"
@@ -646,6 +800,54 @@ async def _run_scan(
                 cmd[0] = tool_path
                 scan.command = " ".join(cmd)
                 await db.commit()
+
+            # Multi-host ffuf: run against each chained live host sequentially
+            if tool_name == "ffuf" and options.get("_chained_hosts"):
+                chained_hosts = options.pop("_chained_hosts")
+                result_count = 0
+                seen = set()
+                scan.command = f"ffuf × {len(chained_hosts)} hosts"
+                await db.commit()
+
+                for host_url in chained_hosts:
+                    if scan_id not in _running and result_count > 0:
+                        break  # cancelled
+                    host_cmd = builder([host_url], options)
+                    host_cmd[0] = tool_path
+                    logger.info("Scan %d: ffuf fuzzing %s", scan_id, host_url)
+                    try:
+                        host_proc = await asyncio.create_subprocess_exec(
+                            *host_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            limit=4 * 1024 * 1024,
+                        )
+                        _running[scan_id] = host_proc
+                        stdout_bytes = await host_proc.stdout.read()
+                        await host_proc.wait()
+                        stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+                        if stdout_text:
+                            for rt, value, metadata in _parse_ffuf_json(stdout_text):
+                                if not value or value in seen:
+                                    continue
+                                seen.add(value)
+                                if not enforcer.is_in_scope(value):
+                                    continue
+                                db.add(ScanResult(
+                                    scan_id=scan_id, result_type=rt,
+                                    value=value, metadata_json=metadata,
+                                ))
+                                result_count += 1
+                            await db.commit()
+                    except Exception:
+                        logger.exception("Scan %d: ffuf failed on %s", scan_id, host_url)
+
+                scan.status = ScanStatus.completed
+                scan.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.info("Scan %d (ffuf multi-host) completed: %d results", scan_id, result_count)
+                _running.pop(scan_id, None)
+                return
 
             # Execute
             logger.info("Running scan %d: %s", scan_id, scan.command)
