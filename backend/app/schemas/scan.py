@@ -43,3 +43,18 @@ class ScanLaunchConfig(BaseModel):
     """Optional configuration for quick/auto/deep scan launches."""
     ports: str | None = None  # e.g. "80,443", "1-1000", "--top-ports 100"
     scan_speed: str = "normal"  # "stealth" | "normal" | "aggressive"
+
+
+class CustomToolConfig(BaseModel):
+    """Configuration for a single tool in a custom scan."""
+    tool_name: str
+    scan_type: str
+    options: dict = {}
+
+
+class CustomScanRequest(BaseModel):
+    """Request body for launching a custom scan pipeline."""
+    tools: list[CustomToolConfig]
+    target_override: str | None = None
+    scan_speed: str = "normal"
+    ports: str | None = None

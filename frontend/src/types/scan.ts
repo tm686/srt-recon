@@ -74,6 +74,12 @@ export interface ConsolidationResponse {
   endpoints: ConsolidatedEndpoint[];
 }
 
+export interface CustomToolConfig {
+  tool_name: string;
+  scan_type: string;
+  options: Record<string, unknown>;
+}
+
 export interface ToolDef {
   value: string;
   label: string;

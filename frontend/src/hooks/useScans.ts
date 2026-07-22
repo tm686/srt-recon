@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/lib/api";
-import type { Scan, ScanListResponse } from "@/types/scan";
+import type { Scan, ScanListResponse, CustomToolConfig } from "@/types/scan";
 
 export function useScans(projectId: number) {
   const [scans, setScans] = useState<Scan[]>([]);
@@ -75,5 +75,20 @@ export function useScans(projectId: number) {
     await fetch();
   };
 
-  return { scans, runningCount, loading, refresh: fetch, startScan, cancelScan, deleteScan, autoScan, quickScan, deepScan };
+  const customScan = async (
+    tools: CustomToolConfig[],
+    scanSpeed?: string,
+    ports?: string,
+    targetOverride?: string,
+  ) => {
+    await api.post(`/projects/${projectId}/scans/custom`, {
+      tools,
+      scan_speed: scanSpeed || "normal",
+      ports: ports || null,
+      target_override: targetOverride || null,
+    });
+    await fetch();
+  };
+
+  return { scans, runningCount, loading, refresh: fetch, startScan, cancelScan, deleteScan, autoScan, quickScan, deepScan, customScan };
 }

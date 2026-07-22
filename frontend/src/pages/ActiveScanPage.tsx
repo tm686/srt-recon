@@ -31,6 +31,8 @@ import type { Scan, ToolDef } from "@/types/scan";
 import type { ToolStatus } from "@/types/settings";
 import { ResultsModal } from "@/components/scans/ResultsModal";
 import { ConsolidationView } from "@/components/scans/ConsolidationView";
+import { CustomScanPanel } from "@/components/scans/CustomScanPanel";
+import type { CustomToolConfig } from "@/types/scan";
 
 // ─── Progress Bar ───────────────────────────────────────────────────
 function ScanProgress({ scan }: { scan: Scan }) {
@@ -292,6 +294,7 @@ export function ActiveScanPage() {
   const [autoScanning, setAutoScanning] = useState(false);
   const [quickScanning, setQuickScanning] = useState(false);
   const [deepScanning, setDeepScanning] = useState(false);
+  const [customScanning, setCustomScanning] = useState(false);
   const [portConfig, setPortConfig] = useState("");
   const [scanSpeed, setScanSpeed] = useState("normal");
   const [showPortConfig, setShowPortConfig] = useState(false);
@@ -306,7 +309,7 @@ export function ActiveScanPage() {
   }>({ open: false, scanId: 0, toolName: "", isRunning: false });
 
   const projectId = selectedProject ? Number(selectedProject) : 0;
-  const { scans, startScan, cancelScan, deleteScan, autoScan, quickScan, deepScan } = useScans(projectId || -1);
+  const { scans, startScan, cancelScan, deleteScan, autoScan, quickScan, deepScan, customScan } = useScans(projectId || -1);
 
   // Map tool status by name
   const toolMap: Record<string, ToolStatus> = {};
@@ -378,6 +381,16 @@ export function ActiveScanPage() {
       await deepScan(portsArg, scanSpeed);
     } finally {
       setDeepScanning(false);
+    }
+  };
+
+  const handleCustomScan = async (tools: CustomToolConfig[]) => {
+    if (!projectId) return;
+    setCustomScanning(true);
+    try {
+      await customScan(tools, scanSpeed, portsArg, targetOverride || undefined);
+    } finally {
+      setCustomScanning(false);
     }
   };
 
@@ -568,6 +581,18 @@ export function ActiveScanPage() {
                 Stealth: nmap -T2 + 100pps, batch 500 | Normal: -T3 + 1000pps | Aggressive: -T4 + 5000pps
               </p>
             </div>
+
+            {/* Custom Scan Panel */}
+            <CustomScanPanel
+              projectId={projectId}
+              toolStatus={toolMap}
+              projectCategory={projectCategory}
+              scanSpeed={scanSpeed}
+              portConfig={portConfig}
+              targetOverride={targetOverride}
+              onRun={handleCustomScan}
+              disabled={customScanning || scans.some((s) => s.status === "running")}
+            />
           </CardContent>
         </Card>
       )}

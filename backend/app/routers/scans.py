@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.engine import get_db
 from app.db.models import Project, Scan, ScanResult, ScanStatus
-from app.schemas.scan import ScanCreate, ScanOut, ScanResultOut, ScanListOut, ScanLaunchConfig
+from app.schemas.scan import ScanCreate, ScanOut, ScanResultOut, ScanListOut, ScanLaunchConfig, CustomScanRequest
 from app.services.scan_runner import start_scan, start_pipeline, cancel_scan, get_running_scan_ids
 from app.services.autoscan import get_pipeline, get_quick_pipeline, get_deep_pipeline, get_threads, get_tools_for_category
 from app.services.settings_service import get_setting
@@ -237,6 +237,54 @@ async def deep_scan(
             "tool_name": step["tool"],
             "scan_type": step["type"],
             "target_override": None,
+            "options": opts,
+        })
+        created_scans.append(_scan_to_out(scan))
+
+    await start_pipeline(pipeline_steps)
+    return created_scans
+
+
+@router.post("/api/projects/{project_id}/scans/custom", response_model=list[ScanOut])
+async def custom_scan(
+    project_id: int,
+    body: CustomScanRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch a custom scan pipeline with user-selected tools and per-tool options."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    created_scans = []
+    pipeline_steps = []
+
+    for tool_cfg in body.tools:
+        scan = Scan(
+            project_id=project_id,
+            scan_type=tool_cfg.scan_type,
+            tool_name=tool_cfg.tool_name,
+            status=ScanStatus.pending,
+        )
+        db.add(scan)
+        await db.commit()
+        await db.refresh(scan)
+
+        opts = dict(tool_cfg.options)
+        # Merge global scan_speed into per-tool options
+        if body.scan_speed and "scan_speed" not in opts:
+            opts["scan_speed"] = body.scan_speed
+        # Merge global ports for port-scanning tools
+        if body.ports and tool_cfg.tool_name in ("nmap", "rustscan") and "ports" not in opts:
+            opts["ports"] = body.ports
+
+        pipeline_steps.append({
+            "scan_id": scan.id,
+            "project_id": project_id,
+            "tool_name": tool_cfg.tool_name,
+            "scan_type": tool_cfg.scan_type,
+            "target_override": body.target_override,
             "options": opts,
         })
         created_scans.append(_scan_to_out(scan))
