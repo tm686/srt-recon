@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { ExternalLink } from "lucide-react";
 import api from "@/lib/api";
 import type { ScanResult } from "@/types/scan";
 
@@ -39,6 +40,49 @@ function StatusBadge({ code }: { code: number | undefined }) {
   return <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${cls}`}>{code}</span>;
 }
 
+// ── Linkable Value ──────────────────────────────────────────────────
+
+function LinkableValue({ value, className }: { value: string; className?: string }) {
+  const isUrl = /^https?:\/\//i.test(value);
+  const isDomain = !isUrl && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(value);
+  const isHostPort = !isUrl && !isDomain && /^[a-z0-9.-]+:\d+$/i.test(value);
+
+  if (isUrl) {
+    return (
+      <a
+        href={value}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`hover:underline inline-flex items-center gap-1 ${className || ""}`}
+        title={value}
+      >
+        <span className="truncate">{value}</span>
+        <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-50" />
+      </a>
+    );
+  }
+
+  if (isDomain || isHostPort) {
+    const href = isDomain ? `https://${value}` : `http://${value}`;
+    return (
+      <span className={`inline-flex items-center gap-1 ${className || ""}`}>
+        <span className="truncate">{value}</span>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="opacity-30 hover:opacity-100 transition-opacity"
+          title={`Open ${href}`}
+        >
+          <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+        </a>
+      </span>
+    );
+  }
+
+  return <span className={`truncate ${className || ""}`}>{value}</span>;
+}
+
 // ── Per-tool result renderers ───────────────────────────────────────
 
 function NucleiTable({ results }: { results: ScanResult[] }) {
@@ -60,7 +104,7 @@ function NucleiTable({ results }: { results: ScanResult[] }) {
               <td className="py-1.5 pr-2"><SeverityBadge severity={m.severity} /></td>
               <td className="py-1.5 pr-2 font-mono text-cyan">{m.template_id}</td>
               <td className="py-1.5 pr-2 text-text">{m.name}</td>
-              <td className="py-1.5 text-text-muted truncate max-w-[200px]">{m.matched_at || r.value}</td>
+              <td className="py-1.5 text-text-muted max-w-[200px]"><LinkableValue value={m.matched_at || r.value} /></td>
             </tr>
           );
         })}
@@ -87,7 +131,7 @@ function HttpxTable({ results }: { results: ScanResult[] }) {
           const techs: string[] = Array.isArray(m.tech) ? m.tech : [];
           return (
             <tr key={r.id} className="border-b border-border/30">
-              <td className="py-1.5 pr-2 font-mono text-cyan truncate max-w-[200px]">{r.value}</td>
+              <td className="py-1.5 pr-2 font-mono text-cyan max-w-[200px]"><LinkableValue value={r.value} /></td>
               <td className="py-1.5 pr-2"><StatusBadge code={m.status_code} /></td>
               <td className="py-1.5 pr-2 text-text">{m.title}</td>
               <td className="py-1.5 pr-2 text-text-muted">{m.server || "-"}</td>
@@ -123,7 +167,7 @@ function PortTable({ results }: { results: ScanResult[] }) {
           const m = safeParse(r.metadata_json);
           return (
             <tr key={r.id} className="border-b border-border/30">
-              <td className="py-1.5 pr-2 font-mono text-cyan">{r.value}</td>
+              <td className="py-1.5 pr-2 font-mono text-cyan"><LinkableValue value={r.value} /></td>
               <td className="py-1.5 pr-2 text-text">{m.protocol || "tcp"}</td>
               <td className="py-1.5 pr-2 text-green">{m.service || "-"}</td>
               <td className="py-1.5 text-text-muted">{m.state || "open"}</td>
@@ -151,7 +195,7 @@ function FfufTable({ results }: { results: ScanResult[] }) {
           const m = safeParse(r.metadata_json);
           return (
             <tr key={r.id} className="border-b border-border/30">
-              <td className="py-1.5 pr-2 font-mono text-cyan truncate max-w-[250px]">{r.value}</td>
+              <td className="py-1.5 pr-2 font-mono text-cyan max-w-[250px]"><LinkableValue value={r.value} /></td>
               <td className="py-1.5 pr-2"><StatusBadge code={m.status} /></td>
               <td className="py-1.5 pr-2 text-text">{m.length ?? "-"}</td>
               <td className="py-1.5 text-text-muted">{m.words ?? "-"}</td>
@@ -178,7 +222,7 @@ function DalfoxTable({ results }: { results: ScanResult[] }) {
           const m = safeParse(r.metadata_json);
           return (
             <tr key={r.id} className="border-b border-border/30">
-              <td className="py-1.5 pr-2 font-mono text-cyan truncate max-w-[300px]">{m.poc || r.value}</td>
+              <td className="py-1.5 pr-2 font-mono text-cyan max-w-[300px]"><LinkableValue value={m.poc || r.value} /></td>
               <td className="py-1.5 pr-2 text-orange-400">{m.type || "XSS"}</td>
               <td className="py-1.5 text-text">{m.param || "-"}</td>
             </tr>
@@ -204,7 +248,7 @@ function SubjackTable({ results }: { results: ScanResult[] }) {
           const m = safeParse(r.metadata_json);
           return (
             <tr key={r.id} className="border-b border-border/30">
-              <td className="py-1.5 pr-2 font-mono text-cyan">{r.value}</td>
+              <td className="py-1.5 pr-2 font-mono text-cyan"><LinkableValue value={r.value} /></td>
               <td className="py-1.5 pr-2 text-text">{m.service || "-"}</td>
               <td className="py-1.5">
                 {m.vulnerable ? (
@@ -284,7 +328,7 @@ function DnsxTable({ results }: { results: ScanResult[] }) {
             .join(" | ");
           return (
             <tr key={r.id} className="border-b border-border/30">
-              <td className="py-1.5 pr-2 font-mono text-cyan">{r.value}</td>
+              <td className="py-1.5 pr-2 font-mono text-cyan"><LinkableValue value={r.value} /></td>
               <td className="py-1.5 pr-2 text-text">{a || "-"}</td>
               <td className="py-1.5 pr-2 text-text-muted">{cname || "-"}</td>
               <td className="py-1.5 text-text-muted truncate max-w-[200px]">{other || "-"}</td>
@@ -300,9 +344,9 @@ function DefaultList({ results }: { results: ScanResult[] }) {
   return (
     <div className="space-y-0.5 font-mono text-xs max-h-[50vh] overflow-y-auto">
       {results.map((r) => (
-        <div key={r.id} className="text-text truncate py-0.5">
+        <div key={r.id} className="text-text py-0.5 flex items-center">
           <span className="text-green mr-2">&gt;</span>
-          {r.value}
+          <LinkableValue value={r.value} />
         </div>
       ))}
     </div>

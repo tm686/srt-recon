@@ -23,6 +23,7 @@ import {
   X,
   AlertTriangle,
   Shield,
+  ExternalLink,
 } from "lucide-react";
 import { useConsolidation } from "@/hooks/useConsolidation";
 import type { ConsolidatedEndpoint } from "@/types/scan";
@@ -187,8 +188,29 @@ function EndpointTable({
                 <ROIBadge score={ep.roi_score} priority={ep.roi_priority} />
               </td>
               <td className="py-1.5 pr-2">
-                <div className="font-mono text-cyan truncate max-w-[350px]">
-                  {ep.value}
+                <div className="font-mono text-cyan max-w-[350px] flex items-center gap-1">
+                  {/^https?:\/\//i.test(ep.value) ? (
+                    <a
+                      href={ep.value}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="truncate hover:underline"
+                      title={ep.value}
+                    >
+                      {ep.value}
+                    </a>
+                  ) : (
+                    <span className="truncate">{ep.value}</span>
+                  )}
+                  {/^https?:\/\//i.test(ep.value) ? (
+                    <a href={ep.value} target="_blank" rel="noopener noreferrer" className="shrink-0 opacity-30 hover:opacity-100 transition-opacity">
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  ) : /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(ep.value) ? (
+                    <a href={`https://${ep.value}`} target="_blank" rel="noopener noreferrer" className="shrink-0 opacity-30 hover:opacity-100 transition-opacity" title={`Open https://${ep.value}`}>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  ) : null}
                 </div>
                 {ep.server && (
                   <div className="text-text-muted text-[10px] truncate">

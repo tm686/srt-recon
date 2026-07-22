@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Download, Search, Trash2 } from "lucide-react";
+import { Download, Search, Trash2, ExternalLink } from "lucide-react";
 import { useProjects } from "@/hooks/useProjects";
 import { useResults } from "@/hooks/useResults";
 
@@ -326,8 +326,31 @@ export function ResultsPage() {
                 <TableBody>
                   {results.map((r, i) => (
                     <TableRow key={`${r.value}-${i}`}>
-                      <TableCell className="font-mono text-sm max-w-md truncate">
-                        {r.value}
+                      <TableCell className="font-mono text-sm max-w-md">
+                        <div className="flex items-center gap-1">
+                          {/^https?:\/\//i.test(r.value) ? (
+                            <a
+                              href={r.value}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="truncate text-cyan hover:underline"
+                              title={r.value}
+                            >
+                              {r.value}
+                            </a>
+                          ) : (
+                            <span className="truncate">{r.value}</span>
+                          )}
+                          {/^https?:\/\//i.test(r.value) ? (
+                            <a href={r.value} target="_blank" rel="noopener noreferrer" className="shrink-0 opacity-30 hover:opacity-100 transition-opacity">
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          ) : /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(r.value) ? (
+                            <a href={`https://${r.value}`} target="_blank" rel="noopener noreferrer" className="shrink-0 opacity-30 hover:opacity-100 transition-opacity" title={`Open https://${r.value}`}>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary" className="text-xs">
