@@ -1,6 +1,16 @@
 """
 Scan runner: builds tool commands, executes as async subprocesses,
 parses output line-by-line into ScanResult rows, enforces scope.
+
+Data flow (pipeline chaining):
+  Phase 1 — subfinder/assetfinder/alterx → subdomains (from raw targets)
+  Phase 2 — dnsx                         → DNS records (from subdomains)
+  Phase 3 — nmap/rustscan                → open ports (from subdomains + DNS IPs)
+  Phase 4 — httpx                        → live hosts (from subdomains + port URLs)
+  Phase 5 — katana/gau/waybackurls       → URLs (from live hosts / subdomains)
+  Phase 6 — ffuf                         → directories (from live hosts, each fuzzed)
+  Phase 7 — nuclei/dalfox/subjack        → vulns (from live hosts + URLs + dirs)
+  Phase 8 — gowitness                    → screenshots (from live hosts)
 """
 
 import asyncio
@@ -440,8 +450,9 @@ def _parse_ffuf_json(text: str) -> list[tuple[str, str, str]]:
 
 
 # ── Pipeline data chaining ──────────────────────────────────────────
-# Queries previous scan results so downstream tools feed from upstream
-# discoveries instead of just the raw project targets.
+# Every tool that isn't a root-level scanner (subfinder/assetfinder)
+# feeds from the results of upstream pipeline stages.  This is the
+# single source of truth for what feeds into what.
 
 async def _get_previous_results(
     db: AsyncSession,
@@ -458,6 +469,26 @@ async def _get_previous_results(
     )
     rows = await db.execute(stmt)
     return [row[0] for row in rows.all()]
+
+
+async def _get_dns_ips(db: AsyncSession, project_id: int) -> list[str]:
+    """Extract unique IPs from dnsx A-record results."""
+    stmt = (
+        select(ScanResult.metadata_json)
+        .join(Scan)
+        .where(Scan.project_id == project_id)
+        .where(ScanResult.result_type == "dns_record")
+    )
+    rows = await db.execute(stmt)
+    ips = set()
+    for (meta_json,) in rows.all():
+        try:
+            meta = json.loads(meta_json or "{}")
+            for ip in (meta.get("a") or []):
+                ips.add(ip)
+        except json.JSONDecodeError:
+            pass
+    return list(ips)
 
 
 def _ports_to_http_targets(port_values: list[str]) -> list[str]:
@@ -479,66 +510,89 @@ def _ports_to_http_targets(port_values: list[str]) -> list[str]:
     return urls
 
 
-async def _resolve_chained_targets(
+async def _resolve_chain(
     db: AsyncSession,
     project_id: int,
     tool_name: str,
     targets: list[str],
-) -> list[str] | None:
-    """For tools that should feed from previous results, return the
-    chained target list.  Returns None if no chaining applies (use raw targets).
-    Falls back to raw targets if no upstream results exist yet.
+) -> list[str]:
+    """Resolve what targets a tool should actually scan based on upstream
+    results.  Every tool has a defined chain — if no upstream data exists
+    yet, falls back to raw project targets (appropriately formatted).
     """
+    stripped = [t.lstrip("*.") for t in targets]
+    as_urls = [t if t.startswith("http") else f"https://{t}" for t in targets]
 
+    # ── Phase 1: Subdomain discovery (root tools — use raw targets) ──
+    if tool_name in ("subfinder", "assetfinder"):
+        return stripped
+
+    # ── Phase 1b: Subdomain permutation ← subdomains ────────────────
+    if tool_name == "alterx":
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        return subs if subs else stripped
+
+    # ── Phase 2: DNS resolution ← subdomains ────────────────────────
+    if tool_name == "dnsx":
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        return subs if subs else stripped
+
+    # ── Phase 3: Port scanning ← subdomains + DNS IPs ───────────────
+    if tool_name in ("nmap", "rustscan"):
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        dns_ips = await _get_dns_ips(db, project_id)
+        # Combine unique hostnames + IPs for comprehensive port scanning
+        chained = list(set(subs + dns_ips))
+        if chained:
+            return chained
+        return stripped
+
+    # ── Phase 4: Live host discovery ← subdomains + port URLs ───────
     if tool_name == "httpx":
-        # Feed from: subdomains + port scan results (as http URLs)
         subs = await _get_previous_results(db, project_id, ["subdomain"])
         ports = await _get_previous_results(db, project_id, ["port"])
         chained = list(set(subs + _ports_to_http_targets(ports)))
-        if chained:
-            return chained
-        # Fall back: strip wildcards from targets
-        return [t.lstrip("*.") for t in targets]
+        return chained if chained else stripped
 
-    if tool_name == "dnsx":
-        # Feed from: subdomains
-        subs = await _get_previous_results(db, project_id, ["subdomain"])
-        if subs:
-            return subs
-        return [t.lstrip("*.") for t in targets]
-
+    # ── Phase 5: URL discovery ← live hosts / subdomains ────────────
     if tool_name == "katana":
-        # Feed from: live_hosts (httpx URLs)
         live = await _get_previous_results(db, project_id, ["live_host"])
-        if live:
-            return live
-        return [t if t.startswith("http") else f"https://{t}" for t in targets]
+        return live if live else as_urls
 
+    if tool_name in ("gau", "waybackurls"):
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        return subs if subs else stripped
+
+    # ── Phase 6: Directory fuzzing ← live hosts ─────────────────────
     if tool_name == "ffuf":
-        # Feed from: live_hosts — fuzz each discovered web host
         live = await _get_previous_results(db, project_id, ["live_host"])
-        if live:
-            return live
-        return None  # use raw targets (default behavior)
+        return live if live else as_urls
 
+    # ── Phase 7: Vulnerability scanning ← everything discovered ─────
     if tool_name == "nuclei":
-        # Feed from: live_hosts + URLs + directories — scan everything discovered
         live = await _get_previous_results(db, project_id, ["live_host"])
         urls = await _get_previous_results(db, project_id, ["url"])
         dirs = await _get_previous_results(db, project_id, ["directory"])
         chained = list(set(live + urls + dirs))
-        if chained:
-            return chained
-        return [t if t.startswith("http") else f"https://{t}" for t in targets]
+        return chained if chained else as_urls
 
-    if tool_name == "gau":
-        # Feed from: subdomains for broader URL discovery
+    if tool_name == "dalfox":
+        urls = await _get_previous_results(db, project_id, ["url"])
+        live = await _get_previous_results(db, project_id, ["live_host"])
+        chained = list(set(urls + live))
+        return chained if chained else as_urls
+
+    if tool_name == "subjack":
         subs = await _get_previous_results(db, project_id, ["subdomain"])
-        if subs:
-            return subs
-        return [t.lstrip("*.") for t in targets]
+        return subs if subs else stripped
 
-    return None  # No chaining — use raw targets
+    # ── Phase 8: Screenshots ← live hosts ───────────────────────────
+    if tool_name == "gowitness":
+        live = await _get_previous_results(db, project_id, ["live_host"])
+        return live if live else as_urls
+
+    # Unknown tool — use raw targets
+    return targets
 
 
 # ── Core scan execution ─────────────────────────────────────────────
@@ -611,34 +665,29 @@ async def _run_scan(
                 await db.commit()
                 return
 
-            # Resolve targets
+            # Resolve raw project targets
             if target_override:
-                targets = [target_override]
+                raw_targets = [target_override]
             else:
                 result = await db.execute(
                     select(Target).where(Target.project_id == project_id)
                 )
                 all_targets = result.scalars().all()
-                targets = [
+                raw_targets = [
                     t.value for t in all_targets
                     if t.direction.value == "in_scope"
                 ]
 
-            if not targets:
+            if not raw_targets:
                 scan.status = ScanStatus.failed
                 scan.error_message = "No in-scope targets"
                 scan.completed_at = datetime.now(timezone.utc)
                 await db.commit()
                 return
 
-            # Chain targets from previous scan results when available
-            chained = await _resolve_chained_targets(db, project_id, tool_name, targets)
-            if chained is not None:
-                # For tools that read from stdin or accept -u, replace targets
-                # Keep original targets for scope enforcement
-                chained_targets = chained
-            else:
-                chained_targets = None
+            # Resolve chained targets from upstream scan results
+            chained = await _resolve_chain(db, project_id, tool_name, raw_targets)
+            chain_count = len(chained)
 
             # Build scope enforcer for output filtering
             result = await db.execute(
@@ -653,7 +702,6 @@ async def _run_scan(
                 if wl:
                     options["wordlist"] = wl
                 else:
-                    # Default to bundled small wordlist
                     bundled = Path(__file__).resolve().parents[2] / "wordlists" / "ffuf-wordlist-default-small.txt"
                     if bundled.is_file():
                         options["wordlist"] = str(bundled)
@@ -667,7 +715,74 @@ async def _run_scan(
                 await db.commit()
                 return
 
-            cmd = builder(targets, options)
+            # ── Prepare tool-specific inputs ─────────────────────────
+            stdin_data = None
+
+            if tool_name in ("httpx", "dnsx"):
+                # stdin-based tools: pipe chained targets
+                stdin_data = "\n".join(chained).encode()
+                cmd = builder(raw_targets, options)  # builder doesn't use targets for these
+                logger.info("Scan %d: %s ← %d targets via stdin",
+                            scan_id, tool_name, chain_count)
+
+            elif tool_name == "alterx":
+                stdin_data = "\n".join(chained).encode()
+                cmd = builder(raw_targets, options)
+                logger.info("Scan %d: alterx ← %d subdomains via stdin",
+                            scan_id, chain_count)
+
+            elif tool_name == "dalfox":
+                stdin_data = "\n".join(chained).encode()
+                cmd = builder(raw_targets, options)
+                logger.info("Scan %d: dalfox ← %d URLs via stdin",
+                            scan_id, chain_count)
+
+            elif tool_name == "nuclei":
+                # nuclei: write targets to file for -l flag
+                target_file = f"/tmp/nuclei_{project_id}_{scan_id}.txt"
+                Path(target_file).write_text("\n".join(chained))
+                options["_target_file"] = target_file
+                cmd = builder(raw_targets, options)
+                logger.info("Scan %d: nuclei ← %d targets via -l file",
+                            scan_id, chain_count)
+
+            elif tool_name == "subjack":
+                # subjack: write targets to file for -w flag
+                input_file = f"/tmp/subjack_{project_id}.txt"
+                Path(input_file).write_text("\n".join(chained))
+                options["input_file"] = input_file
+                cmd = builder(raw_targets, options)
+                logger.info("Scan %d: subjack ← %d subdomains via file",
+                            scan_id, chain_count)
+
+            elif tool_name == "gowitness":
+                # gowitness: write URLs to file for -f flag
+                screenshot_dir = f"/tmp/gowitness/project_{project_id}"
+                Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
+                url_file = f"/tmp/gowitness/project_{project_id}_urls.txt"
+                Path(url_file).write_text("\n".join(chained))
+                options["screenshot_dir"] = screenshot_dir
+                options["url_file"] = url_file
+                cmd = builder(raw_targets, options)
+                logger.info("Scan %d: gowitness ← %d live hosts via file",
+                            scan_id, chain_count)
+
+            elif tool_name in ("nmap", "rustscan"):
+                # Port scanners: pass chained hosts/IPs as targets
+                cmd = builder(chained, options)
+                logger.info("Scan %d: %s ← %d hosts/IPs (subdomains + DNS)",
+                            scan_id, tool_name, chain_count)
+
+            elif tool_name in ("katana", "gau", "waybackurls"):
+                # CLI-arg tools: pass chained targets directly
+                cmd = builder(chained, options)
+                logger.info("Scan %d: %s ← %d chained targets",
+                            scan_id, tool_name, chain_count)
+
+            else:
+                # Root tools (subfinder, assetfinder) or unknown
+                cmd = builder(chained, options)
+
             # Replace tool name with full path
             cmd[0] = tool_path
 
@@ -676,140 +791,14 @@ async def _run_scan(
             scan.started_at = datetime.now(timezone.utc)
             await db.commit()
 
-            # Determine if tool needs stdin or special input handling
-            stdin_data = None
-            if tool_name in ("httpx", "dnsx"):
-                if options.get("stdin_targets"):
-                    stdin_data = "\n".join(options["stdin_targets"]).encode()
-                elif chained_targets:
-                    stdin_data = "\n".join(chained_targets).encode()
-                    logger.info("Scan %d: %s chained from %d previous results",
-                                scan_id, tool_name, len(chained_targets))
-                else:
-                    stdin_data = "\n".join(
-                        t.lstrip("*.") for t in targets
-                    ).encode()
-            elif tool_name == "alterx":
-                # Feed discovered subdomains; fall back to targets
-                sub_stmt = (
-                    select(ScanResult.value)
-                    .join(Scan)
-                    .where(Scan.project_id == project_id)
-                    .where(ScanResult.result_type == "subdomain")
-                )
-                sub_result = await db.execute(sub_stmt)
-                subs = [row[0] for row in sub_result.all()]
-                if not subs:
-                    subs = [t.lstrip("*.") for t in targets]
-                stdin_data = "\n".join(subs).encode()
-            elif tool_name == "dalfox":
-                # dalfox pipe: feed URLs from live_host results or targets
-                live_stmt = (
-                    select(ScanResult.value)
-                    .join(Scan)
-                    .where(Scan.project_id == project_id)
-                    .where(ScanResult.result_type.in_(["url", "live_host"]))
-                )
-                live_result = await db.execute(live_stmt)
-                urls = [row[0] for row in live_result.all()]
-                if not urls:
-                    urls = [
-                        t if t.startswith("http") else f"https://{t}"
-                        for t in targets
-                    ]
-                stdin_data = "\n".join(urls).encode()
-            elif tool_name == "nuclei" and chained_targets:
-                # Write chained targets to a file for nuclei -l
-                target_file = f"/tmp/nuclei_{project_id}_{scan_id}.txt"
-                Path(target_file).write_text("\n".join(chained_targets))
-                options["_target_file"] = target_file
-                logger.info("Scan %d: nuclei chained from %d targets (live_hosts + URLs + dirs)",
-                            scan_id, len(chained_targets))
-                # Rebuild command with target file
-                cmd = builder(targets, options)
-                cmd[0] = tool_path
-                scan.command = " ".join(cmd)
-                await db.commit()
-            elif tool_name == "katana" and chained_targets:
-                # Rebuild katana with chained live hosts
-                cmd = builder(chained_targets, options)
-                cmd[0] = tool_path
-                scan.command = " ".join(cmd)
-                logger.info("Scan %d: katana chained from %d live hosts",
-                            scan_id, len(chained_targets))
-                await db.commit()
-            elif tool_name == "ffuf" and chained_targets:
-                # ffuf fuzzes one host at a time — we'll run against each live host
-                # Store the chained list for multi-target ffuf handling
-                options["_chained_hosts"] = chained_targets
-                logger.info("Scan %d: ffuf chained from %d live hosts",
-                            scan_id, len(chained_targets))
-            elif tool_name == "gau" and chained_targets:
-                # Rebuild gau with discovered subdomains
-                cmd = builder(chained_targets, options)
-                cmd[0] = tool_path
-                scan.command = " ".join(cmd)
-                logger.info("Scan %d: gau chained from %d subdomains",
-                            scan_id, len(chained_targets))
-                await db.commit()
-            elif tool_name == "subjack":
-                # subjack reads from a file; write targets to temp file
-                input_file = f"/tmp/subjack_{project_id}.txt"
-                # Collect subdomains for takeover checking
-                sub_stmt = (
-                    select(ScanResult.value)
-                    .join(Scan)
-                    .where(Scan.project_id == project_id)
-                    .where(ScanResult.result_type == "subdomain")
-                )
-                sub_result = await db.execute(sub_stmt)
-                subs = [row[0] for row in sub_result.all()]
-                if not subs:
-                    subs = [t.lstrip("*.") for t in targets]
-                Path(input_file).write_text("\n".join(subs))
-                options["input_file"] = input_file
-                cmd = builder(targets, options)
-                cmd[0] = tool_path
-                scan.command = " ".join(cmd)
-                await db.commit()
-            elif tool_name == "gowitness":
-                # Collect all live_host results for this project as URLs
-                live_stmt = (
-                    select(ScanResult.value)
-                    .join(Scan)
-                    .where(Scan.project_id == project_id)
-                    .where(ScanResult.result_type == "live_host")
-                )
-                live_result = await db.execute(live_stmt)
-                live_urls = [row[0] for row in live_result.all()]
-                if not live_urls:
-                    # Fall back to targets as URLs
-                    live_urls = [
-                        t if t.startswith("http") else f"https://{t}"
-                        for t in targets
-                    ]
-                # Write URLs to a temp file for gowitness -f
-                screenshot_dir = f"/tmp/gowitness/project_{project_id}"
-                Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
-                url_file = f"/tmp/gowitness/project_{project_id}_urls.txt"
-                Path(url_file).write_text("\n".join(live_urls))
-                options["screenshot_dir"] = screenshot_dir
-                options["url_file"] = url_file
-                # Rebuild command with updated options
-                cmd = builder(targets, options)
-                cmd[0] = tool_path
-                scan.command = " ".join(cmd)
-                await db.commit()
-
-            # Multi-host ffuf: run against each chained live host sequentially
-            if tool_name == "ffuf" and options.get("_chained_hosts"):
-                chained_hosts = options.pop("_chained_hosts")
+            # ── Multi-host ffuf (fuzz each live host separately) ─────
+            if tool_name == "ffuf" and chain_count > 1:
                 result_count = 0
                 seen = set()
-                scan.command = f"ffuf × {len(chained_hosts)} hosts"
+                scan.command = f"ffuf × {chain_count} hosts"
                 await db.commit()
 
-                for host_url in chained_hosts:
+                for host_url in chained:
                     if scan_id not in _running and result_count > 0:
                         break  # cancelled
                     host_cmd = builder([host_url], options)
@@ -849,7 +838,7 @@ async def _run_scan(
                 _running.pop(scan_id, None)
                 return
 
-            # Execute
+            # ── Execute single-process tools ─────────────────────────
             logger.info("Running scan %d: %s", scan_id, scan.command)
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
