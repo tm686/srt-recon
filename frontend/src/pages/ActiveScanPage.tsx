@@ -22,17 +22,18 @@ import {
   Zap,
   Flame,
   Settings2,
+  Clock,
 } from "lucide-react";
 import { useScans } from "@/hooks/useScans";
 import { useProjects } from "@/hooks/useProjects";
 import { useTools } from "@/hooks/useSettings";
 import { SCAN_TOOLS, PIPELINE_PHASES, getToolDef } from "@/types/scan";
-import type { Scan, ToolDef } from "@/types/scan";
+import type { Scan, ToolDef, CustomToolConfig } from "@/types/scan";
 import type { ToolStatus } from "@/types/settings";
 import { ResultsModal } from "@/components/scans/ResultsModal";
 import { ConsolidationView } from "@/components/scans/ConsolidationView";
 import { CustomScanPanel } from "@/components/scans/CustomScanPanel";
-import type { CustomToolConfig } from "@/types/scan";
+import type { PresetMode } from "@/components/scans/CustomScanPanel";
 
 // ─── Progress Bar ───────────────────────────────────────────────────
 function ScanProgress({ scan }: { scan: Scan }) {
@@ -80,8 +81,10 @@ function ToolCard({
   onHistory: () => void;
 }) {
   const isRunning = latestScan?.status === "running";
+  const isPending = latestScan?.status === "pending";
   const isCompleted = latestScan?.status === "completed";
   const isFailed = latestScan?.status === "failed";
+  const isActive = isRunning || isPending;
 
   return (
     <Card className={`bg-surface border-border hover:border-cyan/40 transition-colors ${!relevant ? "opacity-40" : ""}`}>
@@ -118,6 +121,13 @@ function ToolCard({
                   <span className="text-text-muted ml-auto">{latestScan.result_count} found</span>
                 </>
               )}
+              {isPending && (
+                <>
+                  <Clock className="w-3 h-3 text-yellow" />
+                  <span className="text-yellow">Queued</span>
+                  <span className="text-text-muted ml-auto">waiting in pipeline</span>
+                </>
+              )}
               {isCompleted && (
                 <>
                   <CheckCircle className="w-3 h-3 text-green" />
@@ -146,7 +156,7 @@ function ToolCard({
           >
             <History className="w-3 h-3 mr-1" /> History
           </Button>
-          {isRunning ? (
+          {isActive ? (
             <Button
               variant="outline"
               size="sm"
@@ -248,6 +258,7 @@ function OverallProgress({ scans }: { scans: Scan[] }) {
   const total = scans.length;
   const completed = scans.filter((s) => s.status === "completed").length;
   const running = scans.filter((s) => s.status === "running").length;
+  const pending = scans.filter((s) => s.status === "pending").length;
   const failed = scans.filter((s) => s.status === "failed").length;
 
   if (total === 0) return null;
@@ -260,13 +271,18 @@ function OverallProgress({ scans }: { scans: Scan[] }) {
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-3">
-            {running > 0 && <Loader2 className="w-4 h-4 text-cyan animate-spin" />}
+            {(running > 0 || pending > 0) && <Loader2 className="w-4 h-4 text-cyan animate-spin" />}
             <span className="text-sm font-bold text-text">
-              {running > 0 ? `${running} scan${running > 1 ? "s" : ""} running` : "Scans complete"}
+              {running > 0
+                ? `${running} scan${running > 1 ? "s" : ""} running`
+                : pending > 0
+                  ? `${pending} scan${pending > 1 ? "s" : ""} queued`
+                  : "Scans complete"}
             </span>
           </div>
           <div className="flex items-center gap-4 text-xs text-text-muted">
             <span><span className="text-green font-bold">{completed}</span> done</span>
+            {pending > 0 && <span><span className="text-yellow font-bold">{pending}</span> queued</span>}
             <span><span className="text-red font-bold">{failed}</span> failed</span>
             <span><span className="text-cyan font-bold">{totalResults}</span> total results</span>
             <span className="text-text font-bold">{percent}%</span>
@@ -283,22 +299,18 @@ function OverallProgress({ scans }: { scans: Scan[] }) {
   );
 }
 
-// ─── Consolidation: imported from ConsolidationView ─────────────────
-
 // ─── Main Page ──────────────────────────────────────────────────────
 export function ActiveScanPage() {
   const { projects } = useProjects();
   const { tools: toolStatus } = useTools();
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [targetOverride, setTargetOverride] = useState("");
-  const [autoScanning, setAutoScanning] = useState(false);
-  const [quickScanning, setQuickScanning] = useState(false);
-  const [deepScanning, setDeepScanning] = useState(false);
   const [customScanning, setCustomScanning] = useState(false);
   const [portConfig, setPortConfig] = useState("");
   const [scanSpeed, setScanSpeed] = useState("normal");
   const [showPortConfig, setShowPortConfig] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<string | null>(null);
+  const [presetMode, setPresetMode] = useState<PresetMode>(null);
 
   // Results modal state
   const [resultsModal, setResultsModal] = useState<{
@@ -309,7 +321,7 @@ export function ActiveScanPage() {
   }>({ open: false, scanId: 0, toolName: "", isRunning: false });
 
   const projectId = selectedProject ? Number(selectedProject) : 0;
-  const { scans, startScan, cancelScan, deleteScan, autoScan, quickScan, deepScan, customScan } = useScans(projectId || -1);
+  const { scans, startScan, cancelScan, deleteScan, customScan } = useScans(projectId || -1);
 
   // Map tool status by name
   const toolMap: Record<string, ToolStatus> = {};
@@ -329,6 +341,8 @@ export function ActiveScanPage() {
   const projectCategory = selectedProjectData?.category || "";
   const isIpBased = selectedProjectData && ["single_ip", "cidr_range", "ip_list"].includes(selectedProjectData.category);
 
+  const anyRunning = scans.some((s) => s.status === "running" || s.status === "pending");
+
   const handleScan = async (tool: ToolDef) => {
     if (!projectId) return;
     await startScan(tool.value, tool.type, { threads: 10 }, targetOverride || undefined);
@@ -336,7 +350,7 @@ export function ActiveScanPage() {
 
   const handleCancel = async (tool: ToolDef) => {
     const scan = latestScanByTool[tool.value];
-    if (scan && scan.status === "running") {
+    if (scan && (scan.status === "running" || scan.status === "pending")) {
       await cancelScan(scan.id);
     }
   };
@@ -353,36 +367,6 @@ export function ActiveScanPage() {
   };
 
   const portsArg = portConfig.trim() || undefined;
-
-  const handleAutoScan = async () => {
-    if (!projectId) return;
-    setAutoScanning(true);
-    try {
-      await autoScan(portsArg, scanSpeed);
-    } finally {
-      setAutoScanning(false);
-    }
-  };
-
-  const handleQuickScan = async () => {
-    if (!projectId) return;
-    setQuickScanning(true);
-    try {
-      await quickScan(portsArg, scanSpeed);
-    } finally {
-      setQuickScanning(false);
-    }
-  };
-
-  const handleDeepScan = async () => {
-    if (!projectId) return;
-    setDeepScanning(true);
-    try {
-      await deepScan(portsArg, scanSpeed);
-    } finally {
-      setDeepScanning(false);
-    }
-  };
 
   const handleCustomScan = async (tools: CustomToolConfig[]) => {
     if (!projectId) return;
@@ -444,44 +428,30 @@ export function ActiveScanPage() {
                   )}
                 </div>
                 <p className="text-xs text-text-muted mt-1">
-                  <span className="text-cyan">Quick</span> = fast, small wordlists.{" "}
-                  <span className="text-green">Auto</span> = full pipeline.{" "}
-                  <span className="text-orange-400">Deep</span> = all ports, long wordlists, thorough.
+                  Click a preset to configure tools before launching, or use Custom Scan for full control.
                 </p>
               </div>
               <div className="flex gap-2">
                 <Button
-                  onClick={handleQuickScan}
-                  disabled={quickScanning || scans.some((s) => s.status === "running")}
+                  onClick={() => setPresetMode("quick")}
+                  disabled={anyRunning}
                   className="bg-cyan text-background hover:bg-cyan/90"
                 >
-                  {quickScanning ? (
-                    <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Starting...</>
-                  ) : (
-                    <><Zap className="w-4 h-4 mr-1" /> Quick Scan</>
-                  )}
+                  <Zap className="w-4 h-4 mr-1" /> Quick Scan
                 </Button>
                 <Button
-                  onClick={handleAutoScan}
-                  disabled={autoScanning || scans.some((s) => s.status === "running")}
+                  onClick={() => setPresetMode("auto")}
+                  disabled={anyRunning}
                   className="bg-green text-background hover:bg-green/90"
                 >
-                  {autoScanning ? (
-                    <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Starting...</>
-                  ) : (
-                    <><Rocket className="w-4 h-4 mr-1" /> Auto Scan</>
-                  )}
+                  <Rocket className="w-4 h-4 mr-1" /> Auto Scan
                 </Button>
                 <Button
-                  onClick={handleDeepScan}
-                  disabled={deepScanning || scans.some((s) => s.status === "running")}
+                  onClick={() => setPresetMode("deep")}
+                  disabled={anyRunning}
                   className="bg-orange-500 text-background hover:bg-orange-500/90"
                 >
-                  {deepScanning ? (
-                    <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Starting...</>
-                  ) : (
-                    <><Flame className="w-4 h-4 mr-1" /> Deep Scan</>
-                  )}
+                  <Flame className="w-4 h-4 mr-1" /> Deep Scan
                 </Button>
               </div>
             </div>
@@ -591,7 +561,9 @@ export function ActiveScanPage() {
               portConfig={portConfig}
               targetOverride={targetOverride}
               onRun={handleCustomScan}
-              disabled={customScanning || scans.some((s) => s.status === "running")}
+              disabled={customScanning || anyRunning}
+              presetMode={presetMode}
+              onPresetClear={() => setPresetMode(null)}
             />
           </CardContent>
         </Card>
