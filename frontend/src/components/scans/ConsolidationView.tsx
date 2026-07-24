@@ -455,7 +455,7 @@ export function ConsolidationView({ projectId }: { projectId: number }) {
             </div>
 
             {/* Sort */}
-            <Select value={sortBy} onValueChange={setSortBy}>
+            <Select value={sortBy} onValueChange={(v) => setSortBy(v ?? "roi_score")}>
               <SelectTrigger className="w-32 h-7 text-[10px] bg-background">
                 <SelectValue />
               </SelectTrigger>

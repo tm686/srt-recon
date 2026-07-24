@@ -175,7 +175,7 @@ export function SettingsPageContent() {
             <Label className="mb-1 block">ffuf Wordlist</Label>
             <Select
               value={settings.wordlist_ffuf || "__default__"}
-              onValueChange={(v) => update({ wordlist_ffuf: v === "__default__" ? "" : v })}
+              onValueChange={(v) => update({ wordlist_ffuf: v === "__default__" || !v ? "" : v })}
             >
               <SelectTrigger className="bg-background">
                 <SelectValue placeholder="Select wordlist" />

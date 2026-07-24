@@ -330,7 +330,7 @@ function ToolRow({
                   max={p.max}
                   step={p.step}
                   value={[val]}
-                  onValueChange={(v) => onOptionChange(p.key, v[0])}
+                  onValueChange={(v) => onOptionChange(p.key, Array.isArray(v) ? v[0] : v)}
                   disabled={controlsDisabled}
                   className="flex-1"
                 />

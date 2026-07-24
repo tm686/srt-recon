@@ -27,7 +27,7 @@ import {
 import { useScans } from "@/hooks/useScans";
 import { useProjects } from "@/hooks/useProjects";
 import { useTools } from "@/hooks/useSettings";
-import { SCAN_TOOLS, PIPELINE_PHASES, getToolDef } from "@/types/scan";
+import { PIPELINE_PHASES, getToolDef } from "@/types/scan";
 import type { Scan, ToolDef, CustomToolConfig } from "@/types/scan";
 import type { ToolStatus } from "@/types/settings";
 import { ResultsModal } from "@/components/scans/ResultsModal";

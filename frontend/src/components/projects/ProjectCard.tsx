@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Trash2, Globe, Server, Cpu, Network } from "lucide-react";
+import { Trash2, Globe, Server, Cpu, Network, List } from "lucide-react";
 import type { ProjectListItem } from "@/types/project";
 import type { ProjectCategory } from "@/types/project";
 
@@ -11,6 +11,7 @@ const CATEGORY_LABELS: Record<ProjectCategory, { label: string; icon: React.Reac
   single_host: { label: "Host", icon: <Server className="w-3 h-3" />, color: "bg-green/15 text-green" },
   single_ip: { label: "IP", icon: <Cpu className="w-3 h-3" />, color: "bg-purple-400/15 text-purple-400" },
   cidr_range: { label: "CIDR", icon: <Network className="w-3 h-3" />, color: "bg-orange-400/15 text-orange-400" },
+  ip_list: { label: "IP List", icon: <List className="w-3 h-3" />, color: "bg-yellow/15 text-yellow" },
 };
 
 interface Props {
