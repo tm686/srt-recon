@@ -20,6 +20,7 @@ def calculate_roi_score(
     metadata: dict,
     scan_count: int,
     vuln_count: int = 0,
+    exploit_count: int = 0,
 ) -> tuple[int, str]:
     """Calculate ROI score for a consolidated endpoint.
 
@@ -73,6 +74,9 @@ def calculate_roi_score(
 
     # ── Vulnerability signals ──
     score += vuln_count * 20
+
+    # ── Exploit signals — known exploits available for services on this host ──
+    score += exploit_count * 15
 
     # ── Multi-tool corroboration ──
     if scan_count > 1:

@@ -113,7 +113,12 @@ async def quick_scan(
         if config and config.scan_speed:
             opts["scan_speed"] = config.scan_speed
         if step["tool"] == "nmap":
-            opts["ports"] = config.ports if config and config.ports else "--top-ports 100"
+            rustscan_precedes = any(
+                s["tool"] == "rustscan"
+                for s in pipeline[:pipeline.index(step)]
+            )
+            if not rustscan_precedes:
+                opts["ports"] = config.ports if config and config.ports else "--top-ports 100"
         if step["tool"] == "nuclei":
             opts["severity"] = "high,critical"
 
@@ -165,8 +170,13 @@ async def auto_scan(
         opts: dict = {"threads": threads}
         if config and config.scan_speed:
             opts["scan_speed"] = config.scan_speed
-        if step["tool"] == "nmap" and config and config.ports:
-            opts["ports"] = config.ports
+        if step["tool"] == "nmap":
+            rustscan_precedes = any(
+                s["tool"] == "rustscan"
+                for s in pipeline[:pipeline.index(step)]
+            )
+            if not rustscan_precedes and config and config.ports:
+                opts["ports"] = config.ports
 
         pipeline_steps.append({
             "scan_id": scan.id,
@@ -223,7 +233,12 @@ async def deep_scan(
         if config and config.scan_speed:
             opts["scan_speed"] = config.scan_speed
         if step["tool"] == "nmap":
-            opts["ports"] = config.ports if config and config.ports else "1-65535"
+            rustscan_precedes = any(
+                s["tool"] == "rustscan"
+                for s in pipeline[:pipeline.index(step)]
+            )
+            if not rustscan_precedes:
+                opts["ports"] = config.ports if config and config.ports else "1-65535"
         if step["tool"] == "ffuf":
             opts["wordlist"] = ffuf_wordlist
         if step["tool"] == "nuclei":

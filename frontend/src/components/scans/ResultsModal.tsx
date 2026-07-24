@@ -159,6 +159,8 @@ function PortTable({ results }: { results: ScanResult[] }) {
           <th className="text-left py-1.5 pr-2">Host:Port</th>
           <th className="text-left py-1.5 pr-2">Protocol</th>
           <th className="text-left py-1.5 pr-2">Service</th>
+          <th className="text-left py-1.5 pr-2">Version</th>
+          <th className="text-left py-1.5 pr-2">Priority</th>
           <th className="text-left py-1.5">State</th>
         </tr>
       </thead>
@@ -170,6 +172,13 @@ function PortTable({ results }: { results: ScanResult[] }) {
               <td className="py-1.5 pr-2 font-mono text-cyan"><LinkableValue value={r.value} /></td>
               <td className="py-1.5 pr-2 text-text">{m.protocol || "tcp"}</td>
               <td className="py-1.5 pr-2 text-green">{m.service || "-"}</td>
+              <td className="py-1.5 pr-2 text-text">{m.version || "-"}</td>
+              <td className="py-1.5 pr-2">
+                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                  m.priority === "critical" ? "bg-red/20 text-red" :
+                  m.priority === "high" ? "bg-yellow/20 text-yellow" : "text-text-muted"
+                }`}>{m.priority || "medium"}</span>
+              </td>
               <td className="py-1.5 text-text-muted">{m.state || "open"}</td>
             </tr>
           );
@@ -257,6 +266,41 @@ function SubjackTable({ results }: { results: ScanResult[] }) {
                   <Badge variant="secondary" className="text-[10px]">safe</Badge>
                 )}
               </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function ExploitTable({ results }: { results: ScanResult[] }) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-text-muted border-b border-border">
+          <th className="text-left py-1.5 pr-2">EDB-ID</th>
+          <th className="text-left py-1.5 pr-2">Title</th>
+          <th className="text-left py-1.5 pr-2">Platform</th>
+          <th className="text-left py-1.5 pr-2">Affected Hosts</th>
+          <th className="text-left py-1.5">CVEs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {results.map((r) => {
+          const m = safeParse(r.metadata_json);
+          const hosts: string[] = Array.isArray(m.affected_hosts) ? m.affected_hosts : [];
+          const codes = typeof m.codes === "string" ? m.codes : "";
+          return (
+            <tr key={r.id} className="border-b border-border/30">
+              <td className="py-1.5 pr-2 font-mono text-cyan">{m.edb_id || "-"}</td>
+              <td className="py-1.5 pr-2 text-text max-w-[300px] truncate" title={m.title}>{m.title || "-"}</td>
+              <td className="py-1.5 pr-2 text-text-muted">{m.platform || "-"}</td>
+              <td className="py-1.5 pr-2 text-orange-400 max-w-[200px] truncate" title={hosts.join(", ")}>
+                {hosts.length > 0 ? hosts.slice(0, 3).join(", ") : "-"}
+                {hosts.length > 3 && <span className="text-text-muted"> +{hosts.length - 3}</span>}
+              </td>
+              <td className="py-1.5 text-yellow font-mono text-[10px]">{codes || "-"}</td>
             </tr>
           );
         })}
@@ -414,6 +458,7 @@ export function ResultsModal({ open, onClose, projectId, scanId, toolName, isRun
       case "dalfox": return <DalfoxTable results={results} />;
       case "subjack": return <SubjackTable results={results} />;
       case "dnsx": return <DnsxTable results={results} />;
+      case "searchsploit": return <ExploitTable results={results} />;
       case "gowitness": return <ScreenshotGallery results={results} projectId={projectId} />;
       default: return <DefaultList results={results} />;
     }

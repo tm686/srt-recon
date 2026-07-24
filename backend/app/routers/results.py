@@ -38,6 +38,7 @@ class ResultStats(BaseModel):
     vulnerabilities: int
     dns_records: int
     screenshots: int
+    exploits: int
 
 
 # ── Consolidation models ─────────────────────────────────────────────
@@ -99,6 +100,7 @@ async def get_result_stats(project_id: int, db: AsyncSession = Depends(get_db)):
         vulnerabilities=counts.get("vulnerability", 0),
         dns_records=counts.get("dns_record", 0),
         screenshots=counts.get("screenshot", 0),
+        exploits=counts.get("exploit", 0),
     )
 
 
@@ -280,6 +282,21 @@ async def get_consolidation(
     vuln_result = await db.execute(vuln_stmt)
     vuln_map: dict[str, int] = {row[0]: row[1] for row in vuln_result.all()}
 
+    # 4b. Build lookup: host → exploit count (from searchsploit)
+    exploit_stmt = (
+        select(ScanResult.metadata_json)
+        .join(Scan)
+        .where(Scan.project_id == project_id)
+        .where(ScanResult.result_type == "exploit")
+    )
+    exploit_result = await db.execute(exploit_stmt)
+    exploit_host_count: dict[str, int] = {}
+    for (emeta_json,) in exploit_result.all():
+        emeta = _safe_parse(emeta_json)
+        for h in emeta.get("affected_hosts", []):
+            host = h.split(":")[0] if ":" in h else h
+            exploit_host_count[host] = exploit_host_count.get(host, 0) + 1
+
     # 5. Build lookup: screenshot filenames by host
     ss_stmt = (
         select(ScanResult.value)
@@ -339,8 +356,9 @@ async def get_consolidation(
             "tech": tech,
             "server": server,
         }
+        ec = exploit_host_count.get(host, 0)
         roi_score, roi_priority = calculate_roi_score(
-            value, rtype, score_meta, count, vc
+            value, rtype, score_meta, count, vc, ec
         )
 
         ep = ConsolidatedEndpoint(

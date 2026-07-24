@@ -36,6 +36,7 @@ const RESULT_TYPES = [
   { value: "vulnerability", label: "Vulnerabilities" },
   { value: "dns_record", label: "DNS Records" },
   { value: "screenshot", label: "Screenshots" },
+  { value: "exploit", label: "Exploits" },
 ];
 
 // ── Severity Badge ──────────────────────────────────────────────────
@@ -279,7 +280,7 @@ export function ResultsPage() {
 
       {/* Stats */}
       {projectId > 0 && stats && (
-        <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+        <div className="grid grid-cols-3 md:grid-cols-9 gap-2">
           {[
             { label: "Subdomains", count: stats.subdomains, color: "text-cyan" },
             { label: "Live Hosts", count: stats.live_hosts, color: "text-green" },
@@ -287,6 +288,7 @@ export function ResultsPage() {
             { label: "Ports", count: stats.ports, color: "text-yellow" },
             { label: "Dirs", count: stats.directories, color: "text-text" },
             { label: "Vulns", count: stats.vulnerabilities, color: "text-red" },
+            { label: "Exploits", count: stats.exploits, color: "text-orange-400" },
             { label: "DNS", count: stats.dns_records, color: "text-text-muted" },
             { label: "Screenshots", count: stats.screenshots, color: "text-purple-400" },
           ].map((s) => (

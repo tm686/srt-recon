@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.engine import async_session
-from app.db.models import Scan, ScanResult, ScanStatus, Target
+from app.db.models import Project, Scan, ScanResult, ScanStatus, Target
 from app.services.scope import ScopeEnforcer
 from app.services.settings_service import get_setting
 
@@ -110,7 +110,7 @@ def _build_nmap(targets: list[str], opts: dict) -> list[str]:
     else:  # normal
         timing, max_rate, max_retries = "-T3", "1000", "2"
 
-    cmd = ["nmap", "-sV", timing, "--open", "-oG", "-",
+    cmd = ["nmap", "-sC", "-sV", timing, "--open", "-oG", "-",
            "--max-rate", max_rate,
            "--max-retries", max_retries, "--host-timeout", "300s"]
     if str(ports).startswith("--top-ports"):
@@ -237,6 +237,10 @@ def _build_alterx(targets: list[str], opts: dict) -> list[str]:
     return cmd
 
 
+def _build_searchsploit(targets: list[str], opts: dict) -> list[str]:
+    return ["searchsploit", "--json", "--"]
+
+
 BUILDERS: dict[str, callable] = {
     "subfinder": _build_subfinder,
     "dnsx": _build_dnsx,
@@ -253,6 +257,7 @@ BUILDERS: dict[str, callable] = {
     "subjack": _build_subjack,
     "rustscan": _build_rustscan,
     "alterx": _build_alterx,
+    "searchsploit": _build_searchsploit,
 }
 
 # Map tool → result_type
@@ -272,7 +277,27 @@ RESULT_TYPES: dict[str, str] = {
     "gowitness": "screenshot",
     "rustscan": "port",
     "alterx": "subdomain",
+    "searchsploit": "exploit",
 }
+
+
+# ── Service priority classification ──────────────────────────────────
+
+_CRITICAL_SERVICES = {"mysql", "postgresql", "postgres", "mssql", "ms-sql",
+                      "mongodb", "redis", "memcached", "docker", "kubernetes",
+                      "k8s", "elasticsearch", "cassandra", "couchdb"}
+_HIGH_SERVICES = {"http", "https", "ssl/http", "ssl/https", "http-proxy",
+                  "https-proxy", "ajp13", "ftp", "smtp", "rdp", "ms-wbt-server",
+                  "vnc", "telnet", "jenkins", "tomcat", "webmin", "ldap"}
+
+
+def _service_priority(service: str) -> str:
+    svc = service.lower() if service else ""
+    if any(s in svc for s in _CRITICAL_SERVICES):
+        return "critical"
+    if any(s in svc for s in _HIGH_SERVICES):
+        return "high"
+    return "medium"
 
 
 # ── Result parsers ───────────────────────────────────────────────────
@@ -314,7 +339,7 @@ def _parse_line(tool: str, line: str) -> list[tuple[str, str, str]]:
             return [("vulnerability", line, "{}")]
 
     if tool == "nmap":
-        # Parse grepable output: Host: 1.2.3.4 ()   Ports: 22/open/tcp//ssh//, 80/open/tcp//http//
+        # Parse grepable output: Host: 1.2.3.4 ()   Ports: 22/open/tcp//ssh///version_info, 80/open/tcp//http//
         if line.startswith("Host:") and "Ports:" in line:
             parts = line.split("Ports:")
             host_parts = parts[0].split()
@@ -323,7 +348,7 @@ def _parse_line(tool: str, line: str) -> list[tuple[str, str, str]]:
             if not host or not port_str:
                 return []
             results = []
-            # Each port entry: 22/open/tcp//ssh//
+            # Each port entry: 22/open/tcp//ssh//version_string/
             for port_entry in port_str.split(","):
                 port_entry = port_entry.strip().rstrip("/")
                 if not port_entry:
@@ -333,14 +358,22 @@ def _parse_line(tool: str, line: str) -> list[tuple[str, str, str]]:
                 state = fields[1] if len(fields) > 1 else ""
                 protocol = fields[2] if len(fields) > 2 else ""
                 service = fields[4] if len(fields) > 4 else ""
+                version = fields[6] if len(fields) > 6 else ""
                 if state != "open":
                     continue
                 value = f"{host}:{port_num}"
+                web_services = {"http", "https", "ssl/http", "ssl/https", "http-proxy", "https-proxy"}
+                svc_lower = service.lower() if service else ""
+                hint = ("Web service - may need /etc/hosts entry for virtual hosting"
+                        if any(ws in svc_lower for ws in web_services) else "")
                 metadata = json.dumps({
                     "port": port_num,
                     "protocol": protocol,
                     "service": service,
+                    "version": version,
                     "state": state,
+                    "hint": hint,
+                    "priority": _service_priority(service),
                 })
                 results.append(("port", value, metadata))
             return results
@@ -491,6 +524,35 @@ async def _get_dns_ips(db: AsyncSession, project_id: int) -> list[str]:
     return list(ips)
 
 
+async def _get_service_versions(db: AsyncSession, project_id: int) -> list[dict]:
+    """Extract unique service+version pairs from port results, with affected hosts."""
+    stmt = (
+        select(ScanResult.value, ScanResult.metadata_json)
+        .join(Scan)
+        .where(Scan.project_id == project_id)
+        .where(ScanResult.result_type == "port")
+    )
+    rows = await db.execute(stmt)
+    # Group: "Apache httpd 2.4.49" → ["10.1.1.5:80", "10.1.1.12:8080"]
+    query_hosts: dict[str, list[str]] = {}
+    for value, meta_json in rows.all():
+        meta = json.loads(meta_json or "{}")
+        service = meta.get("service", "")
+        version = meta.get("version", "")
+        if not service:
+            continue
+        query = f"{service} {version}".strip()
+        query_hosts.setdefault(query, []).append(value)
+    return [{"query": q, "hosts": h} for q, h in query_hosts.items()]
+
+
+async def _get_project_category(db: AsyncSession, project_id: int) -> str | None:
+    stmt = select(Project.category).where(Project.id == project_id)
+    result = await db.execute(stmt)
+    row = result.first()
+    return row[0].value if row else None
+
+
 def _ports_to_http_targets(port_values: list[str]) -> list[str]:
     """Convert host:port strings into HTTP URLs for probing.
     Common HTTP ports get https://, others get http://.
@@ -537,22 +599,36 @@ async def _resolve_chain(
         subs = await _get_previous_results(db, project_id, ["subdomain"])
         return subs if subs else stripped
 
-    # ── Phase 3: Port scanning ← subdomains + DNS IPs ───────────────
-    if tool_name in ("nmap", "rustscan"):
+    # ── Phase 3a: Port scanning (rustscan) ← subdomains + DNS IPs ───
+    if tool_name == "rustscan":
         subs = await _get_previous_results(db, project_id, ["subdomain"])
         dns_ips = await _get_dns_ips(db, project_id)
-        # Combine unique hostnames + IPs for comprehensive port scanning
         chained = list(set(subs + dns_ips))
-        if chained:
-            return chained
-        return stripped
+        return chained if chained else stripped
+
+    # ── Phase 3b: Port scanning (nmap) ← rustscan ports OR subs+IPs ─
+    if tool_name == "nmap":
+        port_results = await _get_previous_results(db, project_id, ["port"])
+        if port_results:
+            return port_results  # host:port format → _run_scan parses into port spec
+        subs = await _get_previous_results(db, project_id, ["subdomain"])
+        dns_ips = await _get_dns_ips(db, project_id)
+        chained = list(set(subs + dns_ips))
+        return chained if chained else stripped
 
     # ── Phase 4: Live host discovery ← subdomains + port URLs ───────
     if tool_name == "httpx":
+        category = await _get_project_category(db, project_id)
         subs = await _get_previous_results(db, project_id, ["subdomain"])
         ports = await _get_previous_results(db, project_id, ["port"])
-        chained = list(set(subs + _ports_to_http_targets(ports)))
-        return chained if chained else stripped
+        if category in ("single_ip", "cidr_range", "ip_list"):
+            chained = _ports_to_http_targets(ports) if ports else []
+            if not chained:
+                chained = [f"http://{t}" for t in stripped] + [f"https://{t}" for t in stripped]
+            return list(set(chained))
+        else:
+            chained = list(set(subs + _ports_to_http_targets(ports)))
+            return chained if chained else stripped
 
     # ── Phase 5: URL discovery ← live hosts / subdomains ────────────
     if tool_name == "katana":
@@ -563,10 +639,15 @@ async def _resolve_chain(
         subs = await _get_previous_results(db, project_id, ["subdomain"])
         return subs if subs else stripped
 
-    # ── Phase 6: Directory fuzzing ← live hosts ─────────────────────
+    # ── Phase 6: Directory fuzzing ← live hosts / port URLs ─────────
     if tool_name == "ffuf":
         live = await _get_previous_results(db, project_id, ["live_host"])
-        return live if live else as_urls
+        if live:
+            return live
+        ports = await _get_previous_results(db, project_id, ["port"])
+        if ports:
+            return _ports_to_http_targets(ports)
+        return as_urls
 
     # ── Phase 7: Vulnerability scanning ← everything discovered ─────
     if tool_name == "nuclei":
@@ -585,6 +666,11 @@ async def _resolve_chain(
     if tool_name == "subjack":
         subs = await _get_previous_results(db, project_id, ["subdomain"])
         return subs if subs else stripped
+
+    # ── Exploit lookup ← port results with service versions ─────────
+    if tool_name == "searchsploit":
+        port_results = await _get_previous_results(db, project_id, ["port"])
+        return port_results if port_results else []
 
     # ── Phase 8: Screenshots ← live hosts ───────────────────────────
     if tool_name == "gowitness":
@@ -767,11 +853,98 @@ async def _run_scan(
                 logger.info("Scan %d: gowitness ← %d live hosts via file",
                             scan_id, chain_count)
 
-            elif tool_name in ("nmap", "rustscan"):
-                # Port scanners: pass chained hosts/IPs as targets
+            elif tool_name == "rustscan":
                 cmd = builder(chained, options)
-                logger.info("Scan %d: %s ← %d hosts/IPs (subdomains + DNS)",
-                            scan_id, tool_name, chain_count)
+                logger.info("Scan %d: rustscan ← %d hosts/IPs", scan_id, chain_count)
+
+            elif tool_name == "nmap":
+                has_port_data = any(":" in t for t in chained)
+                if has_port_data:
+                    # Chaining from rustscan — parse host:port into grouped format
+                    host_ports: dict[str, set[str]] = {}
+                    plain_hosts: list[str] = []
+                    for t in chained:
+                        if ":" in t:
+                            host, port = t.rsplit(":", 1)
+                            host_ports.setdefault(host, set()).add(port)
+                        else:
+                            plain_hosts.append(t)
+                    all_ports = set()
+                    all_hosts = list(host_ports.keys()) + plain_hosts
+                    for ps in host_ports.values():
+                        all_ports.update(ps)
+                    port_str = ",".join(sorted(all_ports, key=lambda p: int(p) if p.isdigit() else 0))
+                    options["ports"] = port_str
+                    cmd = builder(list(set(all_hosts)), options)
+                    logger.info("Scan %d: nmap -sC -sV ← %d hosts, ports %s (from rustscan)",
+                                scan_id, len(all_hosts), port_str)
+                else:
+                    cmd = builder(chained, options)
+                    logger.info("Scan %d: nmap ← %d hosts/IPs", scan_id, chain_count)
+
+            elif tool_name == "searchsploit":
+                # Multi-query: one searchsploit call per unique service+version
+                svc_versions = await _get_service_versions(db, project_id)
+                result_count = 0
+                seen = set()
+                scan.command = f"searchsploit × {len(svc_versions)} service queries"
+                scan.status = ScanStatus.running
+                scan.started_at = datetime.now(timezone.utc)
+                await db.commit()
+
+                for sv in svc_versions:
+                    query = sv["query"]
+                    hosts = sv["hosts"]
+                    if not query or len(query) < 3:
+                        continue
+                    search_cmd = [tool_path, "--json", query]
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            *search_cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout_bytes = await proc.stdout.read()
+                        await proc.wait()
+                        text = stdout_bytes.decode("utf-8", errors="replace").strip()
+                        if not text:
+                            continue
+                        data = json.loads(text)
+                        for exploit in data.get("RESULTS_EXPLOIT", []):
+                            title = exploit.get("Title", "")
+                            edb_id = exploit.get("EDB-ID", "")
+                            if not title:
+                                continue
+                            value = f"EDB-{edb_id}: {title}"
+                            if value in seen:
+                                continue
+                            seen.add(value)
+                            db.add(ScanResult(
+                                scan_id=scan_id,
+                                result_type="exploit",
+                                value=value,
+                                metadata_json=json.dumps({
+                                    "edb_id": edb_id,
+                                    "title": title,
+                                    "query": query,
+                                    "type": exploit.get("Type", ""),
+                                    "platform": exploit.get("Platform", ""),
+                                    "path": exploit.get("Path", ""),
+                                    "codes": exploit.get("Codes", ""),
+                                    "affected_hosts": hosts[:20],
+                                }),
+                            ))
+                            result_count += 1
+                        await db.commit()
+                    except (json.JSONDecodeError, Exception):
+                        logger.exception("searchsploit failed for: %s", query)
+
+                scan.status = ScanStatus.completed
+                scan.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.info("Scan %d (searchsploit) completed: %d exploits found", scan_id, result_count)
+                _running.pop(scan_id, None)
+                return
 
             elif tool_name in ("katana", "gau", "waybackurls"):
                 # CLI-arg tools: pass chained targets directly

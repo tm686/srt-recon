@@ -42,6 +42,7 @@ export interface ResultStats {
   vulnerabilities: number;
   dns_records: number;
   screenshots: number;
+  exploits: number;
 }
 
 export interface ConsolidatedEndpoint {
@@ -194,6 +195,14 @@ export const SCAN_TOOLS: ToolDef[] = [
     category: "Vulnerability Scanning",
     description: "Subdomain takeover checker testing for dangling CNAME records across cloud providers",
   },
+  // Exploit Lookup
+  {
+    value: "searchsploit",
+    label: "SearchSploit",
+    type: "exploit_lookup",
+    category: "Vulnerability Scanning",
+    description: "Query local Exploit-DB for known exploits matching detected service versions",
+  },
   // Screenshots & Consolidation
   {
     value: "gowitness",
@@ -271,7 +280,7 @@ export const PIPELINE_PHASES: PipelinePhase[] = [
     name: "URL Discovery",
     description: "Crawl and collect URLs from archives and active spidering",
     tools: ["gau", "katana", "waybackurls"],
-    applicableCategories: ["wildcard_domain", "single_host"],
+    applicableCategories: ["wildcard_domain", "single_host", "single_ip", "cidr_range", "ip_list"],
   },
   {
     phase: 6,
