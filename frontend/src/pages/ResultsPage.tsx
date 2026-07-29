@@ -124,9 +124,10 @@ function MetadataDetails({ resultType, metadataJson, value, projectId }: {
     case "port":
       return (
         <span className="text-xs">
+          {m.hostname && <span className="text-purple-400 mr-1">{String(m.hostname)}</span>}
           {m.service && <span className="text-green mr-1">{String(m.service)}</span>}
+          {m.version && <span className="text-text mr-1">{String(m.version)}</span>}
           {m.protocol && <span className="text-text-muted">/{String(m.protocol)}</span>}
-          {m.state && <span className="text-text-muted ml-1">({String(m.state)})</span>}
         </span>
       );
 

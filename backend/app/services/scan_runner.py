@@ -104,15 +104,15 @@ def _build_nmap(targets: list[str], opts: dict) -> list[str]:
     scan_speed = opts.get("scan_speed", "normal")  # stealth | normal | aggressive
 
     if scan_speed == "stealth":
-        timing, max_rate, max_retries = "-T2", "100", "1"
+        timing, max_rate, max_retries, host_timeout = "-T2", "100", "1", "900s"
     elif scan_speed == "aggressive":
-        timing, max_rate, max_retries = "-T4", "5000", "2"
+        timing, max_rate, max_retries, host_timeout = "-T4", "5000", "2", "300s"
     else:  # normal
-        timing, max_rate, max_retries = "-T3", "1000", "2"
+        timing, max_rate, max_retries, host_timeout = "-T3", "1000", "2", "600s"
 
     cmd = ["nmap", "-sC", "-sV", timing, "--open", "-oG", "-",
            "--max-rate", max_rate,
-           "--max-retries", max_retries, "--host-timeout", "300s"]
+           "--max-retries", max_retries, "--host-timeout", host_timeout]
     if str(ports).startswith("--top-ports"):
         cmd += ports.split()
     else:
@@ -339,11 +339,17 @@ def _parse_line(tool: str, line: str) -> list[tuple[str, str, str]]:
             return [("vulnerability", line, "{}")]
 
     if tool == "nmap":
-        # Parse grepable output: Host: 1.2.3.4 ()   Ports: 22/open/tcp//ssh///version_info, 80/open/tcp//http//
+        # Parse grepable output: Host: 1.2.3.4 (hostname)   Ports: 22/open/tcp//ssh///version_info, 80/open/tcp//http//
         if line.startswith("Host:") and "Ports:" in line:
             parts = line.split("Ports:")
             host_parts = parts[0].split()
             host = host_parts[1] if len(host_parts) > 1 else ""
+            # Hostname is in parens: Host: 10.1.1.5 (server.example.com)
+            hostname = ""
+            if len(host_parts) > 2:
+                raw = host_parts[2].strip("()")
+                if raw and raw != host:
+                    hostname = raw
             port_str = parts[1].strip() if len(parts) > 1 else ""
             if not host or not port_str:
                 return []
@@ -372,6 +378,7 @@ def _parse_line(tool: str, line: str) -> list[tuple[str, str, str]]:
                     "service": service,
                     "version": version,
                     "state": state,
+                    "hostname": hostname,
                     "hint": hint,
                     "priority": _service_priority(service),
                 })

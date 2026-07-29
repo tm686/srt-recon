@@ -157,6 +157,7 @@ function PortTable({ results }: { results: ScanResult[] }) {
       <thead>
         <tr className="text-text-muted border-b border-border">
           <th className="text-left py-1.5 pr-2">Host:Port</th>
+          <th className="text-left py-1.5 pr-2">Hostname</th>
           <th className="text-left py-1.5 pr-2">Protocol</th>
           <th className="text-left py-1.5 pr-2">Service</th>
           <th className="text-left py-1.5 pr-2">Version</th>
@@ -170,6 +171,7 @@ function PortTable({ results }: { results: ScanResult[] }) {
           return (
             <tr key={r.id} className="border-b border-border/30">
               <td className="py-1.5 pr-2 font-mono text-cyan"><LinkableValue value={r.value} /></td>
+              <td className="py-1.5 pr-2 text-purple-400">{m.hostname || "-"}</td>
               <td className="py-1.5 pr-2 text-text">{m.protocol || "tcp"}</td>
               <td className="py-1.5 pr-2 text-green">{m.service || "-"}</td>
               <td className="py-1.5 pr-2 text-text">{m.version || "-"}</td>
